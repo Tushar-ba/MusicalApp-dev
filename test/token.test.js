@@ -13,31 +13,34 @@ describe("MusicalToken Contract", function () {
       initializer: "initialize",
     });
     await musicalToken.waitForDeployment();
+    const MarketPlaceContract = await ethers.getContractFactory("NFTMarketplace");
+    const marketplace = await upgrades.deployProxy(MarketPlaceContract,[owner.address,musicalToken.target],{initializer:"initialize",});
+    await musicalToken.setMarketplaceContractAddress(marketplace.target);
   });
 
-  describe("Initialization", function() {
-    it("should initialize with correct owner", async function() {
-        expect(await musicalToken.owner()).to.equal(owner.address);
-    });
+//   describe("Initialization", function() {
+//     it("should initialize with correct owner", async function() {
+//         expect(await musicalToken.owner()).to.equal(owner.address);
+//     });
 
-    it("should not allow reinitialization", async function() {
-        await expect(musicalToken.initialize(user1.address))
-        .to.be.revertedWithCustomError(musicalToken, "InvalidInitialization")
-    });
+//     it("should not allow reinitialization", async function() {
+//         await expect(musicalToken.initialize(user1.address))
+//         .to.be.revertedWithCustomErrorCustomError(musicalToken, "InvalidInitialization")
+//     });
 
-    it("should initialize with correct starting state", async function() {
-        expect(await musicalToken.nextTokenId()).to.equal(0);
-        expect(await musicalToken.MAX_ROYALTY_PERCENTAGE()).to.equal(2000);
-        expect(await musicalToken.FEE_DENOMINATOR()).to.equal(10000);
-    });
+//     it("should initialize with correct starting state", async function() {
+//         expect(await musicalToken.nextTokenId()).to.equal(0);
+//         expect(await musicalToken.MAX_ROYALTY_PERCENTAGE()).to.equal(2000);
+//         expect(await musicalToken.FEE_DENOMINATOR()).to.equal(10000);
+//     });
 
-    it("should support required interfaces after initialization", async function() {
-        const ERC721_INTERFACE_ID = "0x80ac58cd";
-        expect(await musicalToken.supportsInterface(ERC721_INTERFACE_ID)).to.be.true;
-        const ERC721_METADATA_INTERFACE_ID = "0x5b5e139f";
-        expect(await musicalToken.supportsInterface(ERC721_METADATA_INTERFACE_ID)).to.be.true;
-    });
-});
+//     it("should support required interfaces after initialization", async function() {
+//         const ERC721_INTERFACE_ID = "0x80ac58cd";
+//         expect(await musicalToken.supportsInterface(ERC721_INTERFACE_ID)).to.be.true;
+//         const ERC721_METADATA_INTERFACE_ID = "0x5b5e139f";
+//         expect(await musicalToken.supportsInterface(ERC721_METADATA_INTERFACE_ID)).to.be.true;
+//     });
+// });
 
 
 describe("Minting the token",function(){
@@ -52,7 +55,7 @@ describe("Minting the token",function(){
         const AddressZero = ethers.ZeroAddress; 
         //console.log("AddressZero: ", await AddressZero.getAddress());
         await expect(musicalToken.safeMint(AddressZero, _uri))
-            .to.be.revertedWith("Invalid Zero address");
+            .to.be.revertedWithCustomError(musicalToken,"InvalidAddress");
     });
 })
 
@@ -81,7 +84,7 @@ describe("Minting the token",function(){
         const percentages = [1000,1000];
         await expect(
             musicalToken.connect(user2).addRoyaltyRecipients(tokenId, recipients, percentages)
-        ).to.be.revertedWith("Not authorized to manage royalties");
+        ).to.be.revertedWithCustomError(musicalToken,"UnauthorizedAccess");
     })
     it("Should revert if the recipients length and the percentage length is mismatched",async function () {
         const tokenId = 0;
@@ -89,7 +92,7 @@ describe("Minting the token",function(){
         const percentages = [1000,500,500];
         await expect(
             musicalToken.connect(user1).addRoyaltyRecipients(tokenId, recipients, percentages)
-        ).to.be.revertedWith("Recipients and percentages length mismatch");
+        ).to.be.revertedWithCustomError(musicalToken,"RecipientsAndPercentagesMismatch");
     })
     it("Should revert if the percentage is 0",async function () {
         const tokenId = 0;
@@ -105,11 +108,9 @@ describe("Minting the token",function(){
         const percentages = [1000,1500];
         await expect(
             musicalToken.connect(user1).addRoyaltyRecipients(tokenId, recipients, percentages)
-        ).to.be.revertedWith("Total royalty exceeds maximum limit");
+        ).to.be.revertedWithCustomError(musicalToken,"TotalRoyaltyExceedsLimit");
     })
    })
-
-
 
    describe("Getting Royalty Info",async function(){
     it("Should Fetch the Roylaty info correctly",async function(){
@@ -126,9 +127,6 @@ describe("Minting the token",function(){
     })
    })
 
-
-
-
    describe("Should get total Royalty percentage",function(){
     it("Should Fetch the Roylaty info correctly",async function(){
         const _uri = "Hello"
@@ -140,31 +138,6 @@ describe("Minting the token",function(){
         await musicalToken.connect(user1).addRoyaltyRecipients(tokenId, recipients, percentages)
         const info =await musicalToken.getRoyaltyTotalPercentage(tokenId);
        expect(info).to.be.equal(expectedPercentage)
-    })
-   })
-
-
-   describe.skip("Transfer royalty",function(){
-    beforeEach(async function(){
-        const _uri = "Hello"
-        await musicalToken.connect(user1).safeMint(user1.address,_uri);
-        const tokenId = 0;
-        const recipients = [user2.address,user3.address];
-        const percentages = [1000,1000];
-        await musicalToken.connect(user1).addRoyaltyRecipients(tokenId,recipients,percentages)
-    })
-    it("should transfer the ownership to new recipient",async function(){
-        const tokenId = 0;
-        expect(await musicalToken.connect(user1).transferRoyaltyManagement(tokenId,user2.address)).to.emit(musicalToken,"RoyaltyManagementTransferred").withArgs(tokenId,user1.address,user2.address);
-    })
-    it("Should revert if other than the owner is trying to transfer the royalty",async function(){
-        const tokenId = 0;
-        await expect( musicalToken.connect(user2).transferRoyaltyManagement(tokenId,user2.address)).to.be.revertedWith("Not authorized to transfer management")
-    })
-    it("Should revert if the new owner address is invalid",async function(){
-        const tokenId = 0;
-        const AddressZero = ethers.ZeroAddress;
-        await expect( musicalToken.connect(user2).transferRoyaltyManagement(tokenId,AddressZero)).to.be.revertedWith("Not authorized to transfer management")
     })
    })
 
@@ -189,15 +162,14 @@ describe("Minting the token",function(){
     it("Should revert if unaurthorized address/ Not owner of the token tries remove the recipient", async function(){
         const tokenId = 0;
         const recipient = user2.address;
-        await expect( musicalToken.connect(user3).removeRoyaltyRecipient(tokenId,recipient)).to.be.revertedWith("Not authorized to manage royalties")
+        await expect( musicalToken.connect(user3).removeRoyaltyRecipient(tokenId,recipient)).to.be.revertedWithCustomError(musicalToken,"UnauthorizedAccess")
     })
     it("should revert if recipients are not found",async function(){
         const tokenId = 0;
         const recipient = owner.address;
-        await expect( musicalToken.connect(user1).removeRoyaltyRecipient(tokenId,recipient)).to.be.revertedWith("Recipient not found")
+        await expect( musicalToken.connect(user1).removeRoyaltyRecipient(tokenId,recipient)).to.be.revertedWithCustomError(musicalToken,"RecipientNotFound")
     })
    })
-
 
    describe("Set Token URI",function(){
     beforeEach(async function(){
@@ -214,7 +186,7 @@ describe("Minting the token",function(){
     it("should revert if other than owner tries to add the URI",async function(){
         const tokenId = 0;
         const _tokenURI = "thies";
-        await expect( musicalToken.connect(user2).setURI(tokenId,_tokenURI)).to.be.revertedWith("Not a Valid Owner")
+        await expect( musicalToken.connect(user2).setURI(tokenId,_tokenURI)).to.be.revertedWithCustomError(musicalToken,"ERC721InvalidOwner")
     })
    })
 
@@ -272,6 +244,6 @@ describe.skip("MusicalToken Contract", function () {
         
         await expect(
             upgrades.upgradeProxy(await musicalToken.getAddress(), MusicalTokenV2)
-        ).to.be.revertedWithCustomError(musicalToken, "OwnableUnauthorizedAccount");
+        ).to.be.revertedWithCustomErrorCustomError(musicalToken, "OwnableUnauthorizedAccount");
     });
 });

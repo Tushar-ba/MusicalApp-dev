@@ -44,6 +44,13 @@ contract MusicalToken is
         address newManager
     );
 
+    // errors
+    error UnauthorizedAccess(address caller);
+    error InvalidAddress(address addr);
+    error TotalRoyaltyExceedsLimit(uint256 attempted, uint256 max);
+    error RecipientsAndPercentagesMismatch();
+    error RecipientNotFound(address recipient);
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     // constructor() {
     //     _disableInitializers();
@@ -62,7 +69,9 @@ contract MusicalToken is
     /// @param _to The address to receive the minted token
     /// @param _uri The URI for the token's metadata
     function safeMint(address _to, string memory _uri) external {
-        require(address(_to) != address(0), "Invalid Zero address");
+        if (address(_to) == address(0)) {
+            revert InvalidAddress(_to);
+        }
         uint256 tokenId = nextTokenId++;
         _safeMint(_to, tokenId);
         _setTokenURI(tokenId, _uri);
@@ -73,7 +82,9 @@ contract MusicalToken is
     /// @param _tokenId The ID of the token
     /// @param _newUri The new URI for the token's metadata
     function setURI(uint256 _tokenId, string memory _newUri) external {
-        require(msg.sender == ownerOf(_tokenId), "Not a Valid Owner");
+        if (msg.sender != ownerOf(_tokenId)) {
+            revert ERC721InvalidOwner(msg.sender);
+        }
         _setTokenURI(_tokenId, _newUri);
     }
 
@@ -96,14 +107,12 @@ contract MusicalToken is
         address[] calldata _recipients,
         uint256[] calldata _percentages
     ) external {
-        require(
-            msg.sender == tokenRoyaltyManager[_tokenId],
-            "Not authorized to manage royalties"
-        );
-        require(
-            _recipients.length == _percentages.length,
-            "Recipients and percentages length mismatch"
-        );
+        if (msg.sender != tokenRoyaltyManager[_tokenId]) {
+            revert UnauthorizedAccess(msg.sender);
+        }
+        if (_recipients.length != _percentages.length) {
+            revert RecipientsAndPercentagesMismatch();
+        }
 
         RoyaltyInfo storage info = royalties[_tokenId];
         uint256 currentTotalPercentage = 0;
@@ -111,11 +120,15 @@ contract MusicalToken is
         for (uint256 i = 0; i < _recipients.length; i++) {
             require(_percentages[i] > 0, "Percentage must be greater than 0");
             currentTotalPercentage += _percentages[i];
-            require(
-                currentTotalPercentage + oldTotalPercentage <=
-                    MAX_ROYALTY_PERCENTAGE,
-                "Total royalty exceeds maximum limit"
-            ); // Enforce max royalty limit
+            if (
+                currentTotalPercentage + oldTotalPercentage >
+                MAX_ROYALTY_PERCENTAGE
+            ) {
+                revert TotalRoyaltyExceedsLimit(
+                    currentTotalPercentage + oldTotalPercentage,
+                    MAX_ROYALTY_PERCENTAGE
+                );
+            } // Enforce max royalty limit
 
             // Append new recipient and percentage to arrays
             info.recipients.push(_recipients[i]);
@@ -142,10 +155,9 @@ contract MusicalToken is
         uint256 _tokenId,
         address _recipient
     ) external {
-        require(
-            msg.sender == tokenRoyaltyManager[_tokenId],
-            "Not authorized to manage royalties"
-        );
+        if (msg.sender != tokenRoyaltyManager[_tokenId]) {
+            revert UnauthorizedAccess(msg.sender);
+        }
 
         RoyaltyInfo storage info = royalties[_tokenId];
         uint256 length = info.recipients.length;
@@ -162,7 +174,7 @@ contract MusicalToken is
             }
         }
 
-        revert("Recipient not found");
+        revert RecipientNotFound(_recipient);
     }
 
     /// @notice Transfers royalty management of a token to a new manager
@@ -171,15 +183,13 @@ contract MusicalToken is
     function transferRoyaltyManagement(
         uint256 _tokenId,
         address _newManager
-    ) internal {
-        require(
-            msg.sender == marketplace,
-            "Only marketplace contract is allowed to transfer management"
-        );
-        require(
-            _newManager != address(0),
-            "New manager cannot be the zero address"
-        );
+    ) external {
+        if (msg.sender != marketplace) {
+            revert UnauthorizedAccess(msg.sender);
+        }
+        if (_newManager == address(0)) {
+            revert InvalidAddress(_newManager);
+        }
         address oldManager = tokenRoyaltyManager[_tokenId];
         tokenRoyaltyManager[_tokenId] = _newManager;
         delete royalties[_tokenId];

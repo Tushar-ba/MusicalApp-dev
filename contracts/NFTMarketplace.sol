@@ -20,6 +20,14 @@ contract NFTMarketplace is Initializable, OwnableUpgradeable, UUPSUpgradeable {
 
     mapping(uint256 => Listing) public listings; // Tracks listings by token ID
 
+    // Errors
+    error NotTokenOwner(address caller);
+    error MarketplaceNotApproved(uint256 tokenId);
+    error InvalidPrice(uint256 price);
+    error NFTNotListed(uint256 tokenId);
+    error InsufficientPayment(uint256 provided, uint256 required);
+    error NotSeller(address caller);
+
     event NFTListed(
         uint256 indexed tokenId,
         address indexed seller,
@@ -57,15 +65,15 @@ contract NFTMarketplace is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         uint256 _price,
         bool _isSpecialBuy
     ) external {
-        require(
-            musicalToken.ownerOf(_tokenId) == msg.sender,
-            "Not the token owner"
-        );
-        require(
-            musicalToken.getApproved(_tokenId) == address(this),
-            "Marketplace not approved for token"
-        );
-        require(_price > 0, "Price must be greater than zero");
+        if (musicalToken.ownerOf(_tokenId) != msg.sender) {
+            revert NotTokenOwner(msg.sender);
+        }
+        if (musicalToken.getApproved(_tokenId) != address(this)) {
+            revert MarketplaceNotApproved(_tokenId);
+        }
+        if (_price == 0) {
+            revert InvalidPrice(_price);
+        }
 
         // Transfer the NFT to the marketplace contract
         musicalToken.transferFrom(msg.sender, address(this), _tokenId);
@@ -83,43 +91,28 @@ contract NFTMarketplace is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     /// @param _tokenId The ID of the token to purchase
     function purchaseNFT(uint256 _tokenId) external payable {
         Listing memory listing = listings[_tokenId];
-        require(listing.price > 0, "NFT not listed");
-        require(msg.value == listing.price, "Incorrect payment amount");
+        if (listing.price == 0) {
+            revert NFTNotListed(_tokenId);
+        }
+
+        uint msgValue = msg.value;
+        if (msgValue < listing.price) {
+            revert InsufficientPayment(msgValue, listing.price);
+        }
 
         // Handle royalty distribution
-        _distributeRoyalties(_tokenId, msg.value);
+        uint remainingAmount = _distributeRoyalties(_tokenId, msgValue);
 
         // Transfer the NFT to the buyer
         musicalToken.transferFrom(address(this), msg.sender, _tokenId);
 
-        // Pay the seller
-        payable(listing.seller).transfer(msg.value);
-
-        // Remove the listing
-        delete listings[_tokenId];
-
-        emit NFTPurchased(_tokenId, msg.sender, listing.price);
-    }
-
-    /// @notice Special purchase where royalty management is transferred to the buyer
-    /// @param _tokenId The ID of the token to purchase
-    function specialBuy(uint256 _tokenId) external payable {
-        Listing memory listing = listings[_tokenId];
-        require(listing.price > 0, "NFT not listed");
-        require(listing.isSpecialBuy, "Not a special buy");
-        require(msg.value == listing.price, "Incorrect payment amount");
-
-        // Handle royalty distribution
-        _distributeRoyalties(_tokenId, msg.value);
-
-        // Transfer the NFT to the buyer
-        musicalToken.transferFrom(address(this), msg.sender, _tokenId);
-
-        // Transfer royalty management to the buyer
-        musicalToken.transferRoyaltyManagement(_tokenId, msg.sender);
+        if (listing.isSpecialBuy) {
+            // Transfer royalty management to the buyer
+            musicalToken.transferRoyaltyManagement(_tokenId, msg.sender);
+        }
 
         // Pay the seller
-        payable(listing.seller).transfer(msg.value);
+        payable(listing.seller).transfer(remainingAmount);
 
         // Remove the listing
         delete listings[_tokenId];
@@ -130,17 +123,18 @@ contract NFTMarketplace is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     /// @dev Distributes royalties for a token sale
     /// @param _tokenId The ID of the token sold
     /// @param _salePrice The total sale price
+    /// @return remainingAmount The total amount distributed as royalties
     function _distributeRoyalties(
         uint256 _tokenId,
         uint256 _salePrice
-    ) internal {
+    ) internal returns (uint256 remainingAmount) {
         (
             address[] memory recipients,
             uint256[] memory percentages,
 
         ) = musicalToken.getRoyaltyInfo(_tokenId);
 
-        uint256 totalRoyalties;
+        uint256 totalRoyalties = 0;
         for (uint256 i = 0; i < recipients.length; i++) {
             uint256 royalty = (_salePrice * percentages[i]) /
                 musicalToken.FEE_DENOMINATOR();
@@ -148,15 +142,16 @@ contract NFTMarketplace is Initializable, OwnableUpgradeable, UUPSUpgradeable {
             totalRoyalties += royalty;
         }
 
-        // Ensure the royalties do not exceed the total sale price
-        require(totalRoyalties <= _salePrice, "Royalties exceed sale price");
+        remainingAmount = _salePrice - totalRoyalties;
     }
 
     /// @notice Cancels a listing
     /// @param _tokenId The ID of the token to delist
     function cancelListing(uint256 _tokenId) external {
         Listing memory listing = listings[_tokenId];
-        require(listing.seller == msg.sender, "Not the seller");
+        if (listing.seller != msg.sender) {
+            revert NotSeller(msg.sender);
+        }
 
         // Transfer the NFT back to the seller
         musicalToken.transferFrom(address(this), msg.sender, _tokenId);

@@ -12,11 +12,9 @@ describe("MarketPlace Tests", ()=>{
         await MusicalToken.waitForDeployment();
         //console.log("Musical token deployed",MusicalToken.target)
 
-
         const MarketPlaceContract = await ethers.getContractFactory("NFTMarketplace");
         marketPlaceContract = await upgrades.deployProxy(MarketPlaceContract,[owner.address, MusicalToken.target], {initializer:"initialize"});
         await marketPlaceContract.waitForDeployment();
-        
         //console.log("Market Place contract deployed");
 
         // Minting NFT and giving approval
@@ -44,18 +42,18 @@ describe("MarketPlace Tests", ()=>{
         it("Should revert if the signer does not own the token", async function(){
             const tokenId = 0;
             const price = ethers.parseEther("1");
-            await expect( marketPlaceContract.connect(addr2).listNFT(tokenId,price,true)).to.be.revertedWith("Not the token owner")
+            await expect( marketPlaceContract.connect(addr2).listNFT(tokenId,price,true)).to.be.be.revertedWithCustomError(marketPlaceContract,"NotTokenOwner")
         })
         it("Should revert if the token is not approved",async function(){
             await MusicalToken.connect(addr1).safeMint(addr1,"This is a test");
             const tokenId = 1;
             const price = ethers.parseEther("1");
-            await expect( marketPlaceContract.connect(addr1).listNFT(tokenId,price,true)).to.be.revertedWith("Marketplace not approved for token")
+            await expect( marketPlaceContract.connect(addr1).listNFT(tokenId,price,true)).to.be.be.revertedWithCustomError(marketPlaceContract,"MarketplaceNotApproved")
         })
         it("Should revert of the price is 0",async function(){
             const tokenId = 0;
             const price = ethers.parseEther("0");
-            await expect( marketPlaceContract.connect(addr1).listNFT(tokenId,price,true)).to.be.revertedWith("Price must be greater than zero")
+            await expect( marketPlaceContract.connect(addr1).listNFT(tokenId,price,true)).to.be.be.revertedWithCustomError(marketPlaceContract,"InvalidPrice")
         })
     })
     //Tests for purtchasing an NFT 
@@ -65,45 +63,109 @@ describe("MarketPlace Tests", ()=>{
             const price = ethers.parseEther("1");
             await marketPlaceContract.connect(addr1).listNFT(tokenId,price,true);
         })
-        it("Should purchase the NFT",async function (){
+        it("Should purchase the NFT",async function(){
             const tokenId = 0;
             const price = ethers.parseEther("1");
-            expect(await marketPlaceContract.connect(addr4).purchaseNFT(tokenId,{value:price})).to.emit(marketPlaceContract,"NFTPurchased").withArgs(tokenId,addr1.address,price);
+            expect(await marketPlaceContract.connect(addr4).purchaseNFT(tokenId,{value:price})).to.emit(marketPlaceContract,"NFTPurchased").withArgs(tokenId,addr4.address,price);
+            expect(await MusicalToken.ownerOf(tokenId)).to.equal(addr4.address);
         })
-        it("should revert if the NFT is not listed",async function(){
-            await expect( marketPlaceContract.connect(addr2).purchaseNFT(2,{value:ethers.parseEther("1")})).to.revertedWith("NFT not listed");
-        })
-        it("Should Revert is the value is incorrect",async function(){
-            await expect( marketPlaceContract.connect(addr2).purchaseNFT(0,{value:ethers.parseEther("2")})).to.revertedWith("Incorrect payment amount");
-        })
-    })
-    describe("SpecialBuy",function(){
-        beforeEach(async function(){
+        it("Should remove the existing royalty recipients when an NFT with special buy option is true",async function(){
             const tokenId = 0;
             const price = ethers.parseEther("1");
-            await marketPlaceContract.connect(addr1).listNFT(tokenId,price,true);
-            //console.log("Listed")
+            expect(await marketPlaceContract.connect(addr4).purchaseNFT(tokenId,{value:price})).to.emit(marketPlaceContract,"NFTPurchased").withArgs(tokenId,addr4.address,price);
+            const info = await MusicalToken.getRoyaltyInfo(tokenId);
+            expect(info.recipients).to.deep.equal([]);
+            expect(info.percentages).to.deep.equal([]);
+            expect(info.totalPercentage).to.equal(0);
+            expect(await MusicalToken.ownerOf(tokenId)).to.equal(addr4.address);
         })
-        it("Should special buy", async function () {
-            const tokenId = 0;
-            const price = ethers.parseEther("1");
-            const listing = await marketPlaceContract.listings(tokenId);
-            console.log(listing)
-            expect(await marketPlaceContract.connect(addr4).specialBuy(tokenId, { value: price })).to.emit(marketPlaceContract, "NFTPurchased").withArgs(tokenId, addr2.address, price);
-        });
-        
-        it("Should revert if the NFT is not listed",async function(){
-            await expect( marketPlaceContract.connect(addr2).specialBuy(2,{value:ethers.parseEther("1")})).to.revertedWith("NFT not listed");
-        })
-        it("Should revert if special buy is not allowed",async function(){
+        it("Should still contain the royalty recipients if specialBuy is selected false along with there percentages",async function(){
             const tokenId = 1;
+             const _tokenURI = "This is a test"
             const price = ethers.parseEther("1");
-            await MusicalToken.connect(addr1).safeMint(addr1,"_tokenURI");
-            await MusicalToken.connect(addr1).approve(marketPlaceContract.target, 1);
+            const recipients = [addr2.address,addr3.address];
+            const percentage = [1000,1000];
+            await MusicalToken.connect(addr1).safeMint(addr1,_tokenURI);
+            await MusicalToken.connect(addr1).approve(marketPlaceContract.target, tokenId);
+            await MusicalToken.connect(addr1).addRoyaltyRecipients(tokenId,recipients,percentage);
             await marketPlaceContract.connect(addr1).listNFT(tokenId,price,false);
-            const listing = await marketPlaceContract.listings(tokenId);
-            console.log(listing)
-            await expect( marketPlaceContract.connect(addr2).specialBuy(1,{value:ethers.parseEther("1")})).to.revertedWith("Not a special buy");
+            expect(await marketPlaceContract.connect(addr4).purchaseNFT(tokenId,{value:price})).to.emit(marketPlaceContract,"NFTPurchased").withArgs(tokenId,addr4.address,price);
+            const info = await MusicalToken.getRoyaltyInfo(tokenId);
+            expect(info.recipients).to.deep.equal(recipients);
+            expect(info.percentages).to.deep.equal(percentage);
+            expect(info.totalPercentage).to.equal(2000);
+            expect(await MusicalToken.ownerOf(tokenId)).to.equal(addr4.address);
+        })
+        it("Should allow the buyer to add royalty recipients after purchase from the special buy",async function(){
+            const tokenId = 0;
+            const price = ethers.parseEther("1");
+            const recipients = ["0x49f51e3c94b459677c3b1e611db3e44d4e6b1d55","0x6803549eBe803518906B54Be4F2f837D39Cb1Cce"]
+            const percentage = [1000,1000]
+            await marketPlaceContract.connect(addr4).purchaseNFT(tokenId,{value:price});
+            expect(await MusicalToken.connect(addr4).addRoyaltyRecipients(tokenId,recipients,percentage)).to.emit(MusicalToken,"RoyaltyRecipientsAdded").withArgs(tokenId,recipients,percentage);
+            const info = await MusicalToken.getRoyaltyInfo(tokenId);
+            expect(info.recipients).to.deep.equal(recipients);
+            expect(info.percentages).to.deep.equal(percentage);
+            expect(info.totalPercentage).to.equal(2000);
+            expect(await MusicalToken.ownerOf(tokenId)).to.equal(addr4.address);
+        })
+        it("Should not allow the buyer to add royalty recipients if the special buy is not selected",async function(){
+            const tokenId = 1;
+             const _tokenURI = "This is a test"
+            const price = ethers.parseEther("1");
+            const recipients = [addr2.address,addr3.address];
+            const newRecipients = ["0x49f51e3c94b459677c3b1e611db3e44d4e6b1d55","0x6803549eBe803518906B54Be4F2f837D39Cb1Cce"]
+            const percentage = [1000,1000];
+            await MusicalToken.connect(addr1).safeMint(addr1,_tokenURI);
+            await MusicalToken.connect(addr1).approve(marketPlaceContract.target, tokenId);
+            await MusicalToken.connect(addr1).addRoyaltyRecipients(tokenId,recipients,percentage);
+            await marketPlaceContract.connect(addr1).listNFT(tokenId,price,false);
+            await marketPlaceContract.connect(addr4).purchaseNFT(tokenId,{value:price});
+            await expect( MusicalToken.connect(addr4).addRoyaltyRecipients(tokenId,newRecipients,percentage)).to.revertedWithCustomError(MusicalToken,"UnauthorizedAccess");
+        })
+
+        it("Should affect the balances of the buyer and seller after the purchase the NFT", async function () {
+            const tokenId = 0;
+            const price = ethers.parseEther("10");
+            const beforeBalanceAddress1 = BigInt((await ethers.provider.getBalance(addr1.address)).toString());
+            const beforeBalanceAddress2 = BigInt((await ethers.provider.getBalance(addr2.address)).toString());
+            const beforeBalanceAddress3 = BigInt((await ethers.provider.getBalance(addr3.address)).toString());
+            const beforeBalanceAddress4 = BigInt((await ethers.provider.getBalance(addr4.address)).toString());
+            console.log(`Buyer balance before: ${ethers.formatEther(beforeBalanceAddress4.toString())}`);
+            const tx = await marketPlaceContract.connect(addr4).purchaseNFT(tokenId, { value: price });
+            const receipt = await tx.wait();
+            const gasPrice = receipt.effectiveGasPrice || tx.gasPrice;
+            if (!gasPrice) throw new Error("Gas price not available in transaction receipt or tx object");
+        
+            const gasUsed = BigInt(receipt.gasUsed.toString()) * BigInt(gasPrice.toString());
+            const afterBalanceAddress1 = BigInt((await ethers.provider.getBalance(addr1.address)).toString());
+            const afterBalanceAddress2 = BigInt((await ethers.provider.getBalance(addr2.address)).toString());
+            const afterBalanceAddress3 = BigInt((await ethers.provider.getBalance(addr3.address)).toString());
+            const afterBalanceAddress4 = BigInt((await ethers.provider.getBalance(addr4.address)).toString());
+        
+            console.log(`Buyer balance after: ${ethers.formatEther(afterBalanceAddress4.toString())}`);
+            const sellerBalanceChange = afterBalanceAddress1 - beforeBalanceAddress1;
+            const receiptBalanceChange1 = afterBalanceAddress2 - beforeBalanceAddress2;
+            const receiptBalanceChange2 = afterBalanceAddress3 - beforeBalanceAddress3;
+            const buyerBalanceChange = beforeBalanceAddress4 - afterBalanceAddress4;
+        
+            console.log(`Seller balance change: ${ethers.formatEther(sellerBalanceChange.toString())}`);
+            console.log(`Recipient one balance change: ${ethers.formatEther(receiptBalanceChange1.toString())}`);
+            console.log(`Recipient two balance change: ${ethers.formatEther(receiptBalanceChange2.toString())}`);
+            console.log(`Buyer balance change (including gas): ${ethers.formatEther(buyerBalanceChange.toString())}`);
+    
+            expect(ethers.formatUnits(sellerBalanceChange).toString()).to.equal(ethers.formatUnits("8000000000000000000").toString()); 
+            expect(ethers.formatUnits(receiptBalanceChange1).toString()).to.equal(ethers.formatUnits("1000000000000000000").toString()); 
+            expect(ethers.formatUnits(receiptBalanceChange2).toString()).to.equal(ethers.formatUnits("1000000000000000000").toString()); 
+            expect(Number(buyerBalanceChange)).to.be.closeTo(Number(price + gasUsed),Number(ethers.parseEther("0.01")));
+        });
+           
+        it("should revert if the NFT is not listed",async function(){
+            await expect( marketPlaceContract.connect(addr2).purchaseNFT(2,{value:ethers.parseEther("1")})).to.be.revertedWithCustomError(marketPlaceContract,"NFTNotListed");
+        })
+        
+        it("Should Revert is the value is incorrect",async function(){
+            await expect( marketPlaceContract.connect(addr2).purchaseNFT(0,{value:ethers.parseEther("0.5")})).to.be.revertedWithCustomError(marketPlaceContract,"InsufficientPayment");
         })
     })
     describe("Cancle Listing",function(){
@@ -122,28 +184,7 @@ describe("MarketPlace Tests", ()=>{
         })
         it("Should revert is the canceller is not the owner of the token",async function(){
             const tokenId = 0;
-            await expect(marketPlaceContract.connect(addr2).cancelListing(tokenId)).to.be.revertedWith("Not the seller")
+            await expect(marketPlaceContract.connect(addr2).cancelListing(tokenId)).to.be.be.revertedWithCustomError(marketPlaceContract,"NotSeller")
         })
     }) 
-    describe.skip("DistributeRoyalties test cases", function(){
-        beforeEach(async function(){
-            const _tokenURI = "This is a test"
-            const price = ethers.parseEther("1");
-            const tokenId = 1;
-            const recipients = [addr2.address,addr3.address];
-            const percentage = [1000,1000];
-            await MusicalToken.connect(addr1).safeMint(addr1,_tokenURI);
-            await MusicalToken.connect(addr1).approve(marketPlaceContract.target, 0);
-            await MusicalToken.connect(addr1).approve(marketPlaceContract.target, tokenId);
-            await MusicalToken.connect(addr1).addRoyaltyRecipients(tokenId,recipients,percentage);
-            console.log("add royalty percentages")
-            await marketPlaceContract.connect(addr1).listNFT(tokenId,price,true);
-            await marketPlaceContract.connect(addr2).purchaseNFT(tokenId,{value:price})
-        })
-        it("Should distribute royalties accordingly as mentioned in the music contract",async function(){
-            const tokenId = 1;
-            const price = ethers.parseEther("1");
-            expect(await marketPlaceContract.connect(owner)._distributeRoyalties(tokenId,price)).to.changeEtherBalances([addr2.address,addr3.address],[ethers.parseEther("0.1"),ethers.parseEther("0.1")]);
-        })
-    })
 })
