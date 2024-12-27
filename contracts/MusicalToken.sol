@@ -2,19 +2,19 @@
 
 pragma solidity ^0.8.22;
 
-import "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721URIStorageUpgradeable.sol";
-import {ERC721BurnableUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721BurnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC1155/extensions/ERC1155URIStorageUpgradeable.sol";
+import {ERC1155BurnableUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC1155/extensions/ERC1155BurnableUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
-/// @title MusicalToken - An ERC721 Token Contract with Custom Royalty Management
-/// @notice This contract allows minting of ERC721 tokens with extended royalty management capabilities
+/// @title MusicalToken - An ERC1155 Token Contract with Custom Royalty Management
+/// @notice This contract allows minting of ERC1155 tokens with extended royalty management capabilities
 /// @dev Implements UUPSUpgradeable and royalty features
 contract MusicalToken is
     Initializable,
-    ERC721URIStorageUpgradeable,
-    ERC721BurnableUpgradeable,
+    ERC1155URIStorageUpgradeable,
+    ERC1155BurnableUpgradeable,
     OwnableUpgradeable,
     UUPSUpgradeable
 {
@@ -58,34 +58,40 @@ contract MusicalToken is
 
     /// @notice Initializes the contract with an owner
     /// @param _initialOwner The initial owner of the contract
-    function initialize(address _initialOwner) public initializer {
-        __ERC721URIStorage_init();
-        __ERC721Burnable_init();
+    function initialize(
+        address _initialOwner,
+        string memory _baseURI
+    ) public initializer {
+        __ERC1155_init("");
+        _setBaseURI(_baseURI);
         __Ownable_init(_initialOwner);
+        __ERC1155Burnable_init();
         __UUPSUpgradeable_init();
     }
 
     /// @notice Mints a new token to the specified address
     /// @param _to The address to receive the minted token
-    /// @param _uri The URI for the token's metadata
-    function safeMint(address _to, string memory _uri) external {
+    /// @param _tokenURI The URI for the token's metadata
+    function mint(
+        address _to,
+        uint256 _amount,
+        string memory _tokenURI
+    ) external {
         if (address(_to) == address(0)) {
             revert InvalidAddress(_to);
         }
         uint256 tokenId = nextTokenId++;
-        _safeMint(_to, tokenId);
-        _setTokenURI(tokenId, _uri);
+        _mint(_to, tokenId, _amount, "");
+
+        _setURI(tokenId, _tokenURI);
         tokenRoyaltyManager[tokenId] = _to;
     }
 
-    /// @notice Updates the URI of a specific token
-    /// @param _tokenId The ID of the token
-    /// @param _newUri The new URI for the token's metadata
-    function setURI(uint256 _tokenId, string memory _newUri) external {
-        if (msg.sender != ownerOf(_tokenId)) {
-            revert ERC721InvalidOwner(msg.sender);
-        }
-        _setTokenURI(_tokenId, _newUri);
+    /// @notice to update the base uri contract
+    /// @dev only owner will be able to call this function
+    /// @param _baseURI URI of base nft metadata
+    function updateBaseURI(string memory _baseURI) external onlyOwner {
+        _setBaseURI(_baseURI);
     }
 
     /// @notice to set theb marketplace contract address
@@ -216,32 +222,22 @@ contract MusicalToken is
         return (info.recipients, info.percentages, info.totalPercentage);
     }
 
-    /// @notice Overrides the tokenURI function to use ERC721URIStorage
+    //  function checkIfAddressIsTokenRoyaltyManager(uint256 _tokenId) external view returns(bool) {
+    // return msg.sender == tokenRoyaltyManager[_tokenId];
+    // }
+
+    /// @notice Overrides the uri function to use ERC155URIStorage
     /// @param _tokenId The ID of the token
     /// @return The URI of the token
-    function tokenURI(
+    function uri(
         uint256 _tokenId
     )
         public
         view
-        override(ERC721Upgradeable, ERC721URIStorageUpgradeable)
+        override(ERC1155Upgradeable, ERC1155URIStorageUpgradeable)
         returns (string memory)
     {
-        return super.tokenURI(_tokenId);
-    }
-
-    /// @notice Overrides the supportsInterface function to use ERC721URIStorage
-    /// @param interfaceId The interface ID to check
-    /// @return True if the interface is supported, false otherwise
-    function supportsInterface(
-        bytes4 interfaceId
-    )
-        public
-        view
-        override(ERC721Upgradeable, ERC721URIStorageUpgradeable)
-        returns (bool)
-    {
-        return super.supportsInterface(interfaceId);
+        return super.uri(_tokenId);
     }
 
     /// @notice Authorizes contract upgrades
