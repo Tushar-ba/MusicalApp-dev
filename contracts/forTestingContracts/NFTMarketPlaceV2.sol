@@ -7,11 +7,11 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155Receiver.sol";
 import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
-import "../Interface/IMusicalToken.sol";
+import "../../Interface/IMusicalToken.sol";
 
 /// @title NFT Marketplace for MusicalToken
 /// @notice Enables purchase and special buy of MusicalToken NFTs with royalty management and distribution
-contract NFTMarketplace is
+contract NFTMarketplaceV2 is
     Initializable,
     OwnableUpgradeable,
     UUPSUpgradeable,
@@ -406,5 +406,8 @@ contract NFTMarketplace is
         return
             interfaceId == type(IERC1155Receiver).interfaceId ||
             super.supportsInterface(interfaceId);
+    }
+     function newFunction(uint _num) pure external returns(uint){
+        return _num;
     }
 }

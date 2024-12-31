@@ -279,7 +279,7 @@ describe("MarketPlace Tests", ()=>{
             expect(result).to.equal(marketPlaceContract.interface.getFunction("onERC1155BatchReceived").selector);
         });
     })
-    describe("MusicalToken Contract upgradability", function () {
+    describe("Marketplace Contract upgradability", function () {
         let MarketPlace;
         let marketplace;
         let owner;
@@ -295,8 +295,8 @@ describe("MarketPlace Tests", ()=>{
                 { initializer: "initialize", kind: "uups" }
             );
             const MusicalTokenAddress = await musicalToken.waitForDeployment();
-            MarketPlace = await ethers.getContractFactory("MusicalToken");
-            marketplace = await upgrades.deployProxy(MusicalToken, 
+            MarketPlace = await ethers.getContractFactory("NFTMarketplace");
+            marketplace = await upgrades.deployProxy(MarketPlace, 
                 [owner.address,MusicalTokenAddress.target],
                 { initializer: "initialize", kind: "uups" }
             );
@@ -308,9 +308,9 @@ describe("MarketPlace Tests", ()=>{
                 await marketplace.getAddress()
             );
             //console.log("Before upgrade:", beforeImpl);
-            const MarketPlaceV2 = await ethers.getContractFactory("MusicalTokenV2",owner);
+            const MarketPlaceV2 = await ethers.getContractFactory("NFTMarketplaceV2",owner);
             const upgradedProxy = await upgrades.upgradeProxy(await marketplace.getAddress(), MarketPlaceV2);
-            const implementationAddress = await upgrades.erc1967.getImplementationAddress( await upgradedProxy.getAddress());
+            //const implementationAddress = await upgrades.erc1967.getImplementationAddress( await upgradedProxy.getAddress());
             //console.log(implementationAddress)
             const afterImpl = await upgrades.erc1967.getImplementationAddress(await upgradedProxy.getAddress());
             //console.log("After upgrade:", afterImpl);
@@ -318,11 +318,8 @@ describe("MarketPlace Tests", ()=>{
         });
       
         it("should revert if a non-owner tries to authorize the upgrade", async function () {
-            const MusicalTokenV2 = await ethers.getContractFactory("MusicalToken", nonOwner);
-            
-            await expect(
-                upgrades.upgradeProxy(await musicalToken.getAddress(), MusicalTokenV2)
-            ).to.be.revertedWithCustomError(musicalToken, "OwnableUnauthorizedAccount");
+            const MarketPlaceV2 = await ethers.getContractFactory("NFTMarketplaceV2", nonOwner);
+            await expect(upgrades.upgradeProxy(await marketplace.getAddress(), MarketPlaceV2)).to.be.revertedWithCustomError(marketPlaceContract, "OwnableUnauthorizedAccount");
         });
     });
 })
