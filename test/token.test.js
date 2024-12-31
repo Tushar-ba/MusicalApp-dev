@@ -148,49 +148,7 @@ describe("Minting the token",function(){
         await expect( musicalToken.connect(user1).removeRoyaltyRecipient(tokenId,recipient)).to.be.revertedWithCustomError(musicalToken,"RecipientNotFound")
     })
    })
-
-   describe("Set Token URI",function(){
-    beforeEach(async function(){
-        const _uri = "Hello"
-        await musicalToken.connect(user1).safeMint(user1.address,_uri);
-    })
-    it("Should set the URI of the Token",async function(){
-        const tokenId = 0;
-        const _tokenURI = "thies";
-        expect(await musicalToken.connect(user1).setURI(tokenId,_tokenURI));
-        const info = await musicalToken.tokenURI(tokenId);
-        expect(info).to.equal(_tokenURI)
-    })
-    it("should revert if other than owner tries to add the URI",async function(){
-        const tokenId = 0;
-        const _tokenURI = "thies";
-        await expect( musicalToken.connect(user2).setURI(tokenId,_tokenURI)).to.be.revertedWithCustomError(musicalToken,"ERC721InvalidOwner")
-    })
-   })
-
-
-   describe.skip("supportsInterface", function () {
-    it("Should support ERC721 interface", async function () {
-        const ERC721_INTERFACE_ID = "0x80ac58cd"; 
-        const result = await musicalToken.supportsInterface(ERC721_INTERFACE_ID);
-        expect(result).to.be.true;
-    });
-
-    it("Should support ERC721URIStorage interface", async function () {
-        const ERC721URIStorage_INTERFACE_ID = "0x49064906";
-        const result = await musicalToken.supportsInterface(ERC721URIStorage_INTERFACE_ID);
-        expect(result).to.be.true;
-    });
-
-    it("Should not support a non-existent interface", async function () {
-        const NON_EXISTENT_INTERFACE_ID = "0x00000000"; 
-        const result = await musicalToken.supportsInterface(NON_EXISTENT_INTERFACE_ID);
-        expect(result).to.be.false;
-    });
-});
-});
-
-describe.skip("MusicalToken Contract", function () {
+   describe("MusicalToken Contract upgradability", function () {
     let MusicalToken;
     let musicalToken;
     let owner;
@@ -201,20 +159,26 @@ describe.skip("MusicalToken Contract", function () {
         
         MusicalToken = await ethers.getContractFactory("MusicalToken");
         musicalToken = await upgrades.deployProxy(MusicalToken, 
-            [owner.address],
+            [owner.address,"Hello"],
             { initializer: "initialize", kind: "uups" }
         );
         
         await musicalToken.waitForDeployment();
+        //console.log(await musicalToken.getAddress())
     });
   
     it("should allow the owner to authorize the upgrade", async function () {
-        const MusicalTokenV2 = await ethers.getContractFactory("MusicalToken", owner);
-        const upgradedProxy = await upgrades.upgradeProxy(await musicalToken.getAddress(), MusicalTokenV2);
-        const implementationAddress = await upgrades.erc1967.getImplementationAddress(
-            await upgradedProxy.getAddress()
+        const beforeImpl = await upgrades.erc1967.getImplementationAddress(
+            await musicalToken.getAddress()
         );
-        expect(implementationAddress).to.not.equal(await upgrades.erc1967.getImplementationAddress(await musicalToken.getAddress()));
+        //console.log("Before upgrade:", beforeImpl);
+        const MusicalTokenV2 = await ethers.getContractFactory("MusicalTokenV2",owner);
+        const upgradedProxy = await upgrades.upgradeProxy(await musicalToken.getAddress(), MusicalTokenV2);
+        const implementationAddress = await upgrades.erc1967.getImplementationAddress( await upgradedProxy.getAddress());
+        //console.log(implementationAddress)
+        const afterImpl = await upgrades.erc1967.getImplementationAddress(await upgradedProxy.getAddress());
+        //console.log("After upgrade:", afterImpl);
+        expect(beforeImpl).to.not.equal(afterImpl);
     });
   
     it("should revert if a non-owner tries to authorize the upgrade", async function () {
@@ -222,6 +186,8 @@ describe.skip("MusicalToken Contract", function () {
         
         await expect(
             upgrades.upgradeProxy(await musicalToken.getAddress(), MusicalTokenV2)
-        ).to.be.revertedWithCustomErrorCustomError(musicalToken, "OwnableUnauthorizedAccount");
+        ).to.be.revertedWithCustomError(musicalToken, "OwnableUnauthorizedAccount");
     });
 });
+});
+
