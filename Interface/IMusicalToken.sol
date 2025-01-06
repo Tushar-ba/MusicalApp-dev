@@ -37,4 +37,10 @@ interface IMusicalToken {
         uint256 tokenId,
         address newManager
     ) external;
+    function updateRoyaltyRecipients(
+        uint256 _tokenId,
+        address[] calldata _recipients,
+        uint256[] calldata _percentages,
+        uint _royaltySharePercentageInBPS
+    ) external;
 }

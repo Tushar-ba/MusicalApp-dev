@@ -22,11 +22,18 @@ contract NFTMarketplace is
     IMusicalToken public musicalToken;
     uint256 public listingId;
 
+    // Fee configurations
+    FeeConfig public firstTimeSaleFeeDetails;
+    FeeConfig public resellFeeDetails;
+    // Platform fee receiver
+    address public platformFeeReceiver;
+
     struct Listing {
         address seller;
         uint256 tokenId;
         uint256 price;
         uint256 amount;
+        bool isFirstTimeListing;
     }
 
     struct SpecialListing {
@@ -34,10 +41,17 @@ contract NFTMarketplace is
         address seller;
         uint256 price;
     }
+
+    struct FeeConfig {
+        uint256 platformFee; // Platform fee in basis points (bps)
+        uint256 splits; // Splits in basis points (bps)
+        uint256 sellerShare; // Seller share in basis points (bps)
+    }
     mapping(uint256 => SpecialListing) public specialListings;
     mapping(uint256 => Listing) public listings; // Maps listing ID to Listing
-    //itemOwner => tokenId => result
-    mapping(address => mapping(uint => bool)) public isTokenListed;
+    //itemOwner => tokenId => result (listingId)
+    mapping(address => mapping(uint => uint)) public isTokenListed;
+    mapping(uint => bool) public isTokenListedBeforeInMarketplace;
     // Errors
     error NotTokenOwner(address caller);
     error NotTokenRoyaltyManager(address caller);
@@ -50,6 +64,7 @@ contract NFTMarketplace is
     error NotSeller(address caller);
     error TokenAlreadyListed();
     error InvalidBuyer(address buyer);
+    error InvalidPercentage(uint provided, uint required);
 
     event NFTListed(
         uint256 tokenId,
@@ -89,6 +104,26 @@ contract NFTMarketplace is
         uint256 amount
     );
     event SpecialNFTListingCanceled(uint256 tokenId, address seller);
+    event RoyaltyDistributed(
+        uint totalAmount,
+        uint royaltytoBeDistributed,
+        address recipient
+    );
+
+    event FeeConfigUpdated(
+        string saleType,
+        uint256 platformFee,
+        uint256 splits,
+        uint256 sellerShare
+    );
+
+    event PlatformFeeReceiverUpdated(address oldReceiver, address newReceiver);
+
+    event ListingSellerUpdated(
+        uint256 listingId,
+        address oldSeller,
+        address newSeller
+    );
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     // constructor() {
@@ -97,13 +132,30 @@ contract NFTMarketplace is
 
     /// @notice Initializes the contract with an owner
     /// @param _initialOwner The initial owner of the contract
+    /// @param _platformFeeReceiver The initial platform receiver address
     function initialize(
         address _initialOwner,
-        address _musicalTokenAddress
+        address _musicalTokenAddress,
+        address _platformFeeReceiver
     ) public initializer {
         __Ownable_init(_initialOwner);
         __UUPSUpgradeable_init();
+        __ReentrancyGuard_init();
         musicalToken = IMusicalToken(_musicalTokenAddress);
+
+        firstTimeSaleFeeDetails = FeeConfig({
+            platformFee: 1000, // 10%
+            splits: 9000, // 90%
+            sellerShare: 0 // 0%
+        });
+
+        // Initialize resell fees
+        resellFeeDetails = FeeConfig({
+            platformFee: 500, // 5%
+            splits: 500, // 5%
+            sellerShare: 9000 // 90%
+        });
+        platformFeeReceiver = _platformFeeReceiver;
     }
 
     /// @notice Lists an NFT for sale
@@ -115,15 +167,14 @@ contract NFTMarketplace is
         uint256 _price,
         uint256 _amount
     ) external {
-        
-        if (musicalToken.balanceOf(msg.sender,_tokenId) < _amount) {
+        if (musicalToken.balanceOf(msg.sender, _tokenId) < _amount) {
             revert NotTokenOwner(msg.sender);
         }
 
         if (!musicalToken.isApprovedForAll(msg.sender, address(this))) {
             revert MarketplaceNotApproved(msg.sender);
         }
-        if (isTokenListed[msg.sender][_tokenId]) {
+        if (isTokenListed[msg.sender][_tokenId] != 0) {
             revert TokenAlreadyListed();
         }
 
@@ -140,19 +191,24 @@ contract NFTMarketplace is
             ""
         );
 
+        // Increment the listing counter to create a unique ID
+        listingId++;
+
         listings[listingId] = Listing({
             seller: msg.sender,
             tokenId: _tokenId,
             price: _price,
-            amount: _amount
+            amount: _amount,
+            isFirstTimeListing: !isTokenListedBeforeInMarketplace[_tokenId]
         });
 
-        isTokenListed[msg.sender][_tokenId] = true;
+        isTokenListed[msg.sender][_tokenId] = listingId;
 
-        // Increment the listing counter to create a unique ID
-        listingId++;
+        if (!isTokenListedBeforeInMarketplace[_tokenId]) {
+            isTokenListedBeforeInMarketplace[_tokenId] = true;
+        }
 
-        emit NFTListed(_tokenId, msg.sender, _price, _amount, listingId - 1);
+        emit NFTListed(_tokenId, msg.sender, _price, _amount, listingId);
     }
 
     /// @notice Updates the listing details
@@ -209,9 +265,12 @@ contract NFTMarketplace is
             revert NotTokenRoyaltyManager(msg.sender);
         }
 
-
         if (_price == 0) {
             revert InvalidZeroParams();
+        }
+
+        if (!musicalToken.isApprovedForAll(msg.sender, address(this))) {
+            revert MarketplaceNotApproved(msg.sender);
         }
 
         specialListings[_tokenId] = SpecialListing({
@@ -253,8 +312,40 @@ contract NFTMarketplace is
             revert InsufficientPayment(msgValue, totalPrice);
         }
 
-        // Handle royalty distribution
-        uint remainingAmount = _distributeRoyalties(listing.tokenId, msgValue);
+        // Handle payment
+        uint amountForPlatformFee;
+        uint amountForSplits;
+        uint amountForSeller;
+        if (listing.isFirstTimeListing) {
+            //pay the platformFee
+            amountForPlatformFee =
+                (totalPrice * firstTimeSaleFeeDetails.platformFee) /
+                musicalToken.FEE_DENOMINATOR();
+            payable(platformFeeReceiver).transfer(amountForPlatformFee);
+            //distribute the splits
+            amountForSplits =
+                (totalPrice * firstTimeSaleFeeDetails.splits) /
+                musicalToken.FEE_DENOMINATOR();
+            _distributeRoyalties(listing.tokenId, amountForSplits);
+        } else {
+            //pay the platformFee
+            amountForPlatformFee =
+                (totalPrice * resellFeeDetails.platformFee) /
+                musicalToken.FEE_DENOMINATOR();
+
+            //distribute the splits
+            amountForSplits =
+                (totalPrice * resellFeeDetails.splits) /
+                musicalToken.FEE_DENOMINATOR();
+
+            //seller share
+            amountForSeller =
+                (totalPrice * resellFeeDetails.sellerShare) /
+                musicalToken.FEE_DENOMINATOR();
+
+            _distributeRoyalties(listing.tokenId, amountForSplits);
+            payable(listing.seller).transfer(amountForSeller);
+        }
 
         // Transfer the NFT to the buyer
         musicalToken.safeTransferFrom(
@@ -264,9 +355,6 @@ contract NFTMarketplace is
             _amount,
             ""
         );
-
-        // Pay the seller
-        payable(listing.seller).transfer(remainingAmount);
 
         if (listing.amount == _amount) {
             delete listings[_listingId];
@@ -280,7 +368,12 @@ contract NFTMarketplace is
 
     /// @dev special Buy for token royalty
     /// @param _tokenId tokenId of the NFT
-    function specialBuy(uint256 _tokenId) external payable nonReentrant {
+    function specialBuy(
+        uint256 _tokenId,
+        address[] calldata _recipients,
+        uint256[] calldata _percentages,
+        uint _royaltySharePercentageInBPS
+    ) external payable nonReentrant {
         SpecialListing memory specialListing = specialListings[_tokenId];
         if (specialListing.price == 0) {
             revert NFTNotListed(_tokenId);
@@ -291,7 +384,43 @@ contract NFTMarketplace is
             revert InsufficientPayment(msgValue, specialListing.price);
         }
 
+        uint sellerListingId = isTokenListed[specialListing.seller][_tokenId];
+        if (sellerListingId != 0) {
+            Listing storage listing = listings[sellerListingId];
+            listing.seller = msg.sender;
+            delete isTokenListed[specialListing.seller][_tokenId];
+            isTokenListed[msg.sender][_tokenId] = sellerListingId;
+            emit ListingSellerUpdated(
+                sellerListingId,
+                specialListing.seller,
+                msg.sender
+            );
+        }
+        // Transfer the NFT to the new token manager
+        uint tokenbalance = musicalToken.balanceOf(
+            specialListing.seller,
+            _tokenId
+        );
+        musicalToken.safeTransferFrom(
+            specialListing.seller,
+            msg.sender,
+            _tokenId,
+            tokenbalance,
+            ""
+        );
+
+         //transfer the royalty management
         musicalToken.transferRoyaltyManagement(_tokenId, msg.sender);
+
+        //transafer the royalty details
+        musicalToken.updateRoyaltyRecipients(
+            _tokenId,
+            _recipients,
+            _percentages,
+            _royaltySharePercentageInBPS
+        );
+
+        //transfer the amount to seller
         payable(specialListing.seller).transfer(msgValue);
 
         emit SpecialPurchased(_tokenId, specialListing.seller, msg.sender);
@@ -301,11 +430,11 @@ contract NFTMarketplace is
 
     /// @dev Distributes royalties for a token sale
     /// @param _tokenId The ID of the token sold
-    /// @param _salePrice The total sale price
+    /// @param _amountToBeDistributed The total sale price
     /// @return remainingAmount The total amount distributed as royalties
     function _distributeRoyalties(
         uint256 _tokenId,
-        uint256 _salePrice
+        uint256 _amountToBeDistributed
     ) internal returns (uint256 remainingAmount) {
         (
             address[] memory recipients,
@@ -313,15 +442,20 @@ contract NFTMarketplace is
 
         ) = musicalToken.getRoyaltyInfo(_tokenId);
 
-        uint256 totalRoyalties = 0;
+        uint256 totalRoyaltiesDistributed = 0;
         for (uint256 i = 0; i < recipients.length; i++) {
-            uint256 royalty = (_salePrice * percentages[i]) /
+            uint256 royalty = (_amountToBeDistributed * percentages[i]) /
                 musicalToken.FEE_DENOMINATOR();
-            payable(recipients[i]).transfer(royalty);
-            totalRoyalties += royalty;
+            payable(recipients[i]).transfer(royalty); 
+            emit RoyaltyDistributed(
+                _amountToBeDistributed,
+                royalty,
+                recipients[i]
+            );
+            totalRoyaltiesDistributed += royalty;
         }
 
-        remainingAmount = _salePrice - totalRoyalties;
+        remainingAmount = _amountToBeDistributed - totalRoyaltiesDistributed;
     }
 
     /// @notice Cancels a listing
@@ -371,6 +505,63 @@ contract NFTMarketplace is
         emit SpecialNFTListingCanceled(_tokenId, msg.sender);
         // Remove the listing
         delete specialListings[_tokenId];
+    }
+
+    // Function to update first-time sale fee configuration
+    function updateFirstTimeSale(
+        uint256 _platformFee,
+        uint256 _splits,
+        uint256 _sellerShare
+    ) external onlyOwner {
+        if (_platformFee + _splits + _sellerShare != 10000) {
+            revert InvalidPercentage(
+                _platformFee + _splits + _sellerShare,
+                10000
+            );
+        }
+        firstTimeSaleFeeDetails = FeeConfig({
+            platformFee: _platformFee,
+            splits: _splits,
+            sellerShare: _sellerShare
+        });
+
+        emit FeeConfigUpdated(
+            "FirstTimeSale",
+            _platformFee,
+            _splits,
+            _sellerShare
+        );
+    }
+
+    // Function to update resell fee configuration
+    function updateResell(
+        uint256 _platformFee,
+        uint256 _splits,
+        uint256 _sellerShare
+    ) external onlyOwner {
+        if (_platformFee + _splits + _sellerShare != 10000) {
+            revert InvalidPercentage(
+                _platformFee + _splits + _sellerShare,
+                10000
+            );
+        }
+        resellFeeDetails = FeeConfig({
+            platformFee: _platformFee,
+            splits: _splits,
+            sellerShare: _sellerShare
+        });
+
+        emit FeeConfigUpdated("Resell", _platformFee, _splits, _sellerShare);
+    }
+
+    // Function to update the platform fee receiver
+    function updatePlatformFeeReceiver(
+        address _newReceiver
+    ) external onlyOwner {
+        address oldReceiver = platformFeeReceiver;
+        platformFeeReceiver = _newReceiver;
+
+        emit PlatformFeeReceiverUpdated(oldReceiver, _newReceiver);
     }
 
     /// @notice Authorizes contract upgrades

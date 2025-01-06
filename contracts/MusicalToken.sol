@@ -19,6 +19,7 @@ contract MusicalToken is
     UUPSUpgradeable
 {
     uint256 public nextTokenId;
+    uint256 public constant HUNDRED_PERCENT_IN_BPS = 10000; //100%
     uint256 public constant MAX_ROYALTY_PERCENTAGE = 2000; // max 20% can be distributed as royalty
     uint96 public constant FEE_DENOMINATOR = 10000;
     address public marketplace;
@@ -26,7 +27,7 @@ contract MusicalToken is
     struct RoyaltyInfo {
         address[] recipients;
         uint256[] percentages;
-        uint256 totalPercentage;
+        uint256 royaltySharePercentageInBPS;
     }
 
     mapping(uint256 => address) public tokenRoyaltyManager;
@@ -35,7 +36,8 @@ contract MusicalToken is
     event RoyaltyRecipientsAdded(
         uint256 tokenId,
         address[] recipients,
-        uint256[] percentages
+        uint256[] percentages,
+        uint256 royaltySharePercentageInBPS
     );
     event RoyaltyRecipientRemoved(uint256 tokenId, address recipient);
     event RoyaltyManagementTransferred(
@@ -50,6 +52,8 @@ contract MusicalToken is
     error TotalRoyaltyExceedsLimit(uint256 attempted, uint256 max);
     error RecipientsAndPercentagesMismatch();
     error RecipientNotFound(address recipient);
+    error InvalidPercentage(uint provided, uint required);
+    error MaxRoyaltyShareExceed();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     // constructor() {
@@ -72,19 +76,58 @@ contract MusicalToken is
     /// @notice Mints a new token to the specified address
     /// @param _to The address to receive the minted token
     /// @param _tokenURI The URI for the token's metadata
+    /// @param _recipients Array of addresses to receive royalties
+    /// @param _percentages Array of percentages corresponding to each recipient
+    /// @param _royaltySharePercentageInBPS percentage share for secondary sell
     function mint(
         address _to,
         uint256 _amount,
-        string memory _tokenURI
+        string memory _tokenURI,
+        address[] calldata _recipients,
+        uint256[] calldata _percentages,
+        uint _royaltySharePercentageInBPS
     ) external {
         if (address(_to) == address(0)) {
             revert InvalidAddress(_to);
+        }
+        if (_recipients.length != _percentages.length) {
+            revert RecipientsAndPercentagesMismatch();
+        }
+
+        if (_royaltySharePercentageInBPS > MAX_ROYALTY_PERCENTAGE) {
+            revert MaxRoyaltyShareExceed();
         }
         uint256 tokenId = nextTokenId++;
         _mint(_to, tokenId, _amount, "");
 
         _setURI(tokenId, _tokenURI);
         tokenRoyaltyManager[tokenId] = _to;
+
+        RoyaltyInfo storage info = royalties[tokenId];
+        uint256 totalRoyaltyPercentage = 0;
+
+        for (uint256 i = 0; i < _percentages.length; i++) {
+            totalRoyaltyPercentage += _percentages[i];
+        }
+        if (totalRoyaltyPercentage != HUNDRED_PERCENT_IN_BPS) {
+            revert InvalidPercentage(
+                totalRoyaltyPercentage,
+                HUNDRED_PERCENT_IN_BPS
+            );
+        }
+        for (uint256 i = 0; i < _recipients.length; i++) {
+            // Append new recipient and percentage to arrays
+            info.recipients.push(_recipients[i]);
+            info.percentages.push(_percentages[i]);
+        }
+        info.royaltySharePercentageInBPS = _royaltySharePercentageInBPS;
+
+        emit RoyaltyRecipientsAdded(
+            tokenId,
+            _recipients,
+            _percentages,
+            _royaltySharePercentageInBPS
+        );
     }
 
     /// @notice to update the base uri contract
@@ -103,85 +146,90 @@ contract MusicalToken is
         marketplace = _marketplace;
     }
 
-    /// @notice Adds royalty recipients and percentages to a token
+    /// @notice update royalty recipients and percentages to a token
     /// @dev Ensures the total percentage does not exceed MAX_ROYALTY_PERCENTAGE
     /// @param _tokenId The ID of the token
     /// @param _recipients Array of addresses to receive royalties
     /// @param _percentages Array of percentages corresponding to each recipient
-    function addRoyaltyRecipients(
+    /// @param _royaltySharePercentageInBPS percentage share for secondary sell
+    function updateRoyaltyRecipients(
         uint256 _tokenId,
         address[] calldata _recipients,
-        uint256[] calldata _percentages
+        uint256[] calldata _percentages,
+        uint _royaltySharePercentageInBPS
     ) external {
-        if (msg.sender != tokenRoyaltyManager[_tokenId]) {
+        if (
+           msg.sender != tokenRoyaltyManager[_tokenId] &&
+           msg.sender != marketplace
+        ) {
             revert UnauthorizedAccess(msg.sender);
         }
         if (_recipients.length != _percentages.length) {
             revert RecipientsAndPercentagesMismatch();
         }
 
-        RoyaltyInfo storage info = royalties[_tokenId];
-        uint256 currentTotalPercentage = 0;
-        uint256 oldTotalPercentage = getRoyaltyTotalPercentage(_tokenId);
-        for (uint256 i = 0; i < _recipients.length; i++) {
-            require(_percentages[i] > 0, "Percentage must be greater than 0");
-            currentTotalPercentage += _percentages[i];
-            if (
-                currentTotalPercentage + oldTotalPercentage >
-                MAX_ROYALTY_PERCENTAGE
-            ) {
-                revert TotalRoyaltyExceedsLimit(
-                    currentTotalPercentage + oldTotalPercentage,
-                    MAX_ROYALTY_PERCENTAGE
-                );
-            } // Enforce max royalty limit
+        if (_royaltySharePercentageInBPS > MAX_ROYALTY_PERCENTAGE) {
+            revert MaxRoyaltyShareExceed();
+        }
 
+        RoyaltyInfo storage info = royalties[_tokenId];
+        uint256 totalRoyaltyPercentage = 0;
+        delete info.recipients;
+        delete info.percentages;
+        
+
+        for (uint256 i = 0; i < _percentages.length; i++) {
+            totalRoyaltyPercentage += _percentages[i];
+        }
+        if (totalRoyaltyPercentage != HUNDRED_PERCENT_IN_BPS) {
+            revert InvalidPercentage(
+                totalRoyaltyPercentage,
+                HUNDRED_PERCENT_IN_BPS
+            );
+        }
+        for (uint256 i = 0; i < _recipients.length; i++) {
             // Append new recipient and percentage to arrays
             info.recipients.push(_recipients[i]);
             info.percentages.push(_percentages[i]);
         }
-        info.totalPercentage += currentTotalPercentage;
-        emit RoyaltyRecipientsAdded(_tokenId, _recipients, _percentages);
-    }
+        info.royaltySharePercentageInBPS = _royaltySharePercentageInBPS;
 
-    /// @notice Returns the total royalty percentage for a token
-    /// @param _tokenId The ID of the token
-    /// @return The total royalty percentage in basis points
-    function getRoyaltyTotalPercentage(
-        uint256 _tokenId
-    ) public view returns (uint256) {
-        RoyaltyInfo memory info = royalties[_tokenId];
-        return info.totalPercentage;
+        emit RoyaltyRecipientsAdded(
+            _tokenId,
+            _recipients,
+            _percentages,
+            _royaltySharePercentageInBPS
+        );
     }
 
     /// @notice Removes a royalty recipient from a token
     /// @param _tokenId The ID of the token
     /// @param _recipient The address of the recipient to remove
-    function removeRoyaltyRecipient(
-        uint256 _tokenId,
-        address _recipient
-    ) external {
-        if (msg.sender != tokenRoyaltyManager[_tokenId]) {
-            revert UnauthorizedAccess(msg.sender);
-        }
+    // function removeRoyaltyRecipient(
+    //     uint256 _tokenId,
+    //     address _recipient
+    // ) external {
+    //     if (msg.sender != tokenRoyaltyManager[_tokenId]) {
+    //         revert UnauthorizedAccess(msg.sender);
+    //     }
 
-        RoyaltyInfo storage info = royalties[_tokenId];
-        uint256 length = info.recipients.length;
+    //     RoyaltyInfo storage info = royalties[_tokenId];
+    //     uint256 length = info.recipients.length;
 
-        for (uint256 i = 0; i < length; i++) {
-            if (info.recipients[i] == _recipient) {
-                info.totalPercentage -= info.percentages[i];
-                info.recipients[i] = info.recipients[length - 1];
-                info.percentages[i] = info.percentages[length - 1];
-                info.recipients.pop();
-                info.percentages.pop();
-                emit RoyaltyRecipientRemoved(_tokenId, _recipient);
-                return;
-            }
-        }
+    //     for (uint256 i = 0; i < length; i++) {
+    //         if (info.recipients[i] == _recipient) {
+    //             info.totalPercentage -= info.percentages[i];
+    //             info.recipients[i] = info.recipients[length - 1];
+    //             info.percentages[i] = info.percentages[length - 1];
+    //             info.recipients.pop();
+    //             info.percentages.pop();
+    //             emit RoyaltyRecipientRemoved(_tokenId, _recipient);
+    //             return;
+    //         }
+    //     }
 
-        revert RecipientNotFound(_recipient);
-    }
+    //     revert RecipientNotFound(_recipient);
+    // }
 
     /// @notice Transfers royalty management of a token to a new manager
     /// @param _tokenId The ID of the token
@@ -206,7 +254,7 @@ contract MusicalToken is
     /// @param _tokenId The ID of the token
     /// @return recipients Array of royalty recipient addresses
     /// @return percentages Array of royalty percentages
-    /// @return totalPercentage Total royalty percentage in basis points
+    /// @return royaltySharePercentageInBPS Total royalty percentage in basis points
     function getRoyaltyInfo(
         uint256 _tokenId
     )
@@ -215,16 +263,16 @@ contract MusicalToken is
         returns (
             address[] memory recipients,
             uint256[] memory percentages,
-            uint256 totalPercentage
+            uint256 royaltySharePercentageInBPS
         )
     {
         RoyaltyInfo memory info = royalties[_tokenId];
-        return (info.recipients, info.percentages, info.totalPercentage);
+        return (
+            info.recipients,
+            info.percentages,
+            info.royaltySharePercentageInBPS
+        );
     }
-
-    //  function checkIfAddressIsTokenRoyaltyManager(uint256 _tokenId) external view returns(bool) {
-    // return msg.sender == tokenRoyaltyManager[_tokenId];
-    // }
 
     /// @notice Overrides the uri function to use ERC155URIStorage
     /// @param _tokenId The ID of the token
