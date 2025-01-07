@@ -40,6 +40,7 @@ contract NFTMarketplace is
         uint256 tokenId;
         address seller;
         uint256 price;
+        uint256 amount;
     }
 
     struct FeeConfig {
@@ -52,6 +53,9 @@ contract NFTMarketplace is
     //itemOwner => tokenId => result (listingId)
     mapping(address => mapping(uint => uint)) public isTokenListed;
     mapping(uint => bool) public isTokenListedBeforeInMarketplace;
+
+    mapping(address => uint256) public undistributedFunds;
+
     // Errors
     error NotTokenOwner(address caller);
     error NotTokenRoyaltyManager(address caller);
@@ -73,10 +77,11 @@ contract NFTMarketplace is
         uint amount,
         uint listingId
     );
-    event NFTListedForTransferTokenManager(
+    event NFTListedSpecial(
         uint256 tokenId,
         address seller,
-        uint256 price
+        uint256 price,
+        uint256 userTokenBalance
     );
     event NFTListUpdated(
         uint256 tokenId,
@@ -93,6 +98,7 @@ contract NFTMarketplace is
     );
     event SpecialPurchased(
         uint256 tokenId,
+        uint256 amount,
         address oldTokenManager,
         address newTokenManager
     );
@@ -118,6 +124,7 @@ contract NFTMarketplace is
     );
 
     event PlatformFeeReceiverUpdated(address oldReceiver, address newReceiver);
+    event PlatforFlowReceived(address feeReceiver, uint256 amount);
 
     event ListingSellerUpdated(
         uint256 listingId,
@@ -125,14 +132,24 @@ contract NFTMarketplace is
         address newSeller
     );
 
+    event sellerAmountReceived(
+        uint listingId,
+        uint listingPrice,
+        uint receivedAmount
+    );
+
+    event RoyaltyDistributionFailed(address recipient, uint256 amount);
+    event FundsWithdrawn(address account, uint256 amount);
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     // constructor() {
     //     _disableInitializers();
     // }
 
-    /// @notice Initializes the contract with an owner
+    /// @notice Initializes the marketplace contract
     /// @param _initialOwner The initial owner of the contract
-    /// @param _platformFeeReceiver The initial platform receiver address
+    /// @param _musicalTokenAddress The address of the MusicalToken contract
+    /// @param _platformFeeReceiver The address to receive platform fees
     function initialize(
         address _initialOwner,
         address _musicalTokenAddress,
@@ -273,13 +290,26 @@ contract NFTMarketplace is
             revert MarketplaceNotApproved(msg.sender);
         }
 
+        // Transfer the NFT to the marketplace contract
+
+        uint tokenBalance = musicalToken.balanceOf(msg.sender, _tokenId);
+
+        musicalToken.safeTransferFrom(
+            msg.sender,
+            address(this),
+            _tokenId,
+            tokenBalance,
+            ""
+        );
+
         specialListings[_tokenId] = SpecialListing({
             tokenId: _tokenId,
             seller: msg.sender,
-            price: _price
+            price: _price,
+            amount: tokenBalance
         });
 
-        emit NFTListedForTransferTokenManager(_tokenId, msg.sender, _price);
+        emit NFTListedSpecial(_tokenId, msg.sender, _price, tokenBalance);
     }
 
     /// @notice Purchases a listed NFT
@@ -308,7 +338,7 @@ contract NFTMarketplace is
 
         uint msgValue = msg.value;
         uint256 totalPrice = listing.price * _amount;
-        if (msgValue < totalPrice) {
+        if (msgValue != totalPrice) {
             revert InsufficientPayment(msgValue, totalPrice);
         }
 
@@ -321,7 +351,13 @@ contract NFTMarketplace is
             amountForPlatformFee =
                 (totalPrice * firstTimeSaleFeeDetails.platformFee) /
                 musicalToken.FEE_DENOMINATOR();
-            payable(platformFeeReceiver).transfer(amountForPlatformFee);
+
+            (bool success, ) = payable(platformFeeReceiver).call{
+                value: amountForPlatformFee
+            }("");
+            require(success, "Royalty transfer failed");
+
+            emit PlatforFlowReceived(platformFeeReceiver, amountForPlatformFee);
             //distribute the splits
             amountForSplits =
                 (totalPrice * firstTimeSaleFeeDetails.splits) /
@@ -332,7 +368,7 @@ contract NFTMarketplace is
             amountForPlatformFee =
                 (totalPrice * resellFeeDetails.platformFee) /
                 musicalToken.FEE_DENOMINATOR();
-
+            emit PlatforFlowReceived(platformFeeReceiver, amountForPlatformFee);
             //distribute the splits
             amountForSplits =
                 (totalPrice * resellFeeDetails.splits) /
@@ -344,7 +380,17 @@ contract NFTMarketplace is
                 musicalToken.FEE_DENOMINATOR();
 
             _distributeRoyalties(listing.tokenId, amountForSplits);
-            payable(listing.seller).transfer(amountForSeller);
+
+            (bool success, ) = payable(listing.seller).call{
+                value: amountForSeller
+            }("");
+            require(success, "Royalty transfer failed");
+
+            emit sellerAmountReceived(
+                _listingId,
+                listing.amount,
+                amountForSeller
+            );
         }
 
         // Transfer the NFT to the buyer
@@ -366,8 +412,13 @@ contract NFTMarketplace is
         emit NFTPurchased(listing.tokenId, _amount, totalPrice, msg.sender);
     }
 
-    /// @dev special Buy for token royalty
-    /// @param _tokenId tokenId of the NFT
+    /// @notice Facilitates the purchase of a special listing for a token and updates its royalty details
+    /// @dev Transfers ownership of the token, updates royalty management, and transfers the sale amount to the seller.
+    /// Updates royalty recipients and their percentages. Removes the listing after the purchase.
+    /// @param _tokenId The ID of the token being purchased
+    /// @param _recipients The array of addresses to receive royalties
+    /// @param _percentages The array of percentages (in basis points) for each royalty recipient
+    /// @param _royaltySharePercentageInBPS The total percentage of the sale to be distributed as royalties (in basis points)
     function specialBuy(
         uint256 _tokenId,
         address[] calldata _recipients,
@@ -397,22 +448,20 @@ contract NFTMarketplace is
             );
         }
         // Transfer the NFT to the new token manager
-        uint tokenbalance = musicalToken.balanceOf(
-            specialListing.seller,
-            _tokenId
-        );
+
         musicalToken.safeTransferFrom(
-            specialListing.seller,
+            address(this),
             msg.sender,
             _tokenId,
-            tokenbalance,
+            specialListing.amount,
             ""
         );
 
-         //transfer the royalty management
+        //transfer the royalty management
+        //is this step old royalty configuration will be deleted
         musicalToken.transferRoyaltyManagement(_tokenId, msg.sender);
 
-        //transafer the royalty details
+        //transfer the royalty details
         musicalToken.updateRoyaltyRecipients(
             _tokenId,
             _recipients,
@@ -421,17 +470,28 @@ contract NFTMarketplace is
         );
 
         //transfer the amount to seller
-        payable(specialListing.seller).transfer(msgValue);
 
-        emit SpecialPurchased(_tokenId, specialListing.seller, msg.sender);
+        (bool success, ) = payable(specialListing.seller).call{value: msgValue}(
+            ""
+        );
+        require(success, "Royalty transfer failed");
+
+        emit SpecialPurchased(
+            _tokenId,
+            msgValue,
+            specialListing.seller,
+            msg.sender
+        );
         // Remove the listing
         delete specialListings[_tokenId];
     }
 
-    /// @dev Distributes royalties for a token sale
-    /// @param _tokenId The ID of the token sold
-    /// @param _amountToBeDistributed The total sale price
-    /// @return remainingAmount The total amount distributed as royalties
+    /// @notice Distributes royalties for a token sale to the respective recipients
+    /// @dev This function calculates and sends royalties to all recipients based on their percentages.
+    /// If a transfer fails, the royalty amount is added to `undistributedFunds` for that recipient.
+    /// @param _tokenId The ID of the token for which royalties are being distributed
+    /// @param _amountToBeDistributed The total amount available for distribution as royalties
+    /// @return remainingAmount The amount left undistributed after attempting all transfers
     function _distributeRoyalties(
         uint256 _tokenId,
         uint256 _amountToBeDistributed
@@ -446,7 +506,15 @@ contract NFTMarketplace is
         for (uint256 i = 0; i < recipients.length; i++) {
             uint256 royalty = (_amountToBeDistributed * percentages[i]) /
                 musicalToken.FEE_DENOMINATOR();
-            payable(recipients[i]).transfer(royalty); 
+
+            (bool success, ) = payable(recipients[i]).call{value: royalty}("");
+
+            if (!success) {
+                undistributedFunds[recipients[i]] += royalty;
+                emit RoyaltyDistributionFailed(recipients[i], royalty);
+                continue; // Skip failed transfers
+            }
+
             emit RoyaltyDistributed(
                 _amountToBeDistributed,
                 royalty,
@@ -502,12 +570,27 @@ contract NFTMarketplace is
         if (specialListing.seller != msg.sender) {
             revert NotSeller(msg.sender);
         }
+
+        // Transfer the NFT back to the seller
+        musicalToken.safeTransferFrom(
+            address(this),
+            msg.sender,
+            specialListing.tokenId,
+            specialListing.amount,
+            ""
+        );
+
         emit SpecialNFTListingCanceled(_tokenId, msg.sender);
         // Remove the listing
         delete specialListings[_tokenId];
     }
 
-    // Function to update first-time sale fee configuration
+    /// @notice Updates the fee configuration for first-time sales
+    /// @dev This function sets the platform fee, splits, and seller share percentages
+    /// for first-time sales. The sum of these percentages must equal 10000 basis points (100%).
+    /// @param _platformFee The percentage (in basis points) allocated as the platform fee
+    /// @param _splits The percentage (in basis points) allocated to royalty splits
+    /// @param _sellerShare The percentage (in basis points) allocated to the seller
     function updateFirstTimeSale(
         uint256 _platformFee,
         uint256 _splits,
@@ -533,7 +616,12 @@ contract NFTMarketplace is
         );
     }
 
-    // Function to update resell fee configuration
+    /// @notice Updates the fee configuration for resales
+    /// @dev This function sets the platform fee, splits, and seller share percentages
+    /// for resales. The sum of these percentages must equal 10000 basis points (100%).
+    /// @param _platformFee The percentage (in basis points) allocated as the platform fee
+    /// @param _splits The percentage (in basis points) allocated to royalty splits
+    /// @param _sellerShare The percentage (in basis points) allocated to the seller
     function updateResell(
         uint256 _platformFee,
         uint256 _splits,
@@ -554,14 +642,31 @@ contract NFTMarketplace is
         emit FeeConfigUpdated("Resell", _platformFee, _splits, _sellerShare);
     }
 
-    // Function to update the platform fee receiver
+    /// @notice Updates the address that receives platform fees
+    /// @dev This function allows the owner to update the platform fee receiver address.
+    /// The new address must not be the zero address.
+    /// @param _newPlatformFeeReceiver The new address to receive platform fees
     function updatePlatformFeeReceiver(
-        address _newReceiver
+        address _newPlatformFeeReceiver
     ) external onlyOwner {
+        require(_newPlatformFeeReceiver != address(0), "Invalid address");
         address oldReceiver = platformFeeReceiver;
-        platformFeeReceiver = _newReceiver;
+        platformFeeReceiver = _newPlatformFeeReceiver;
 
-        emit PlatformFeeReceiverUpdated(oldReceiver, _newReceiver);
+        emit PlatformFeeReceiverUpdated(oldReceiver, _newPlatformFeeReceiver);
+    }
+
+    /// @notice Withdraws undistributed royalty funds for a specific recipient
+    /// @dev This function allows the contract owner to withdraw the undistributed funds
+    /// for a specified recipient. The recipient must have undistributed funds available.
+    /// @param recipient The address of the recipient to withdraw funds for
+    function withdrawUndistributedFunds(address recipient) external onlyOwner {
+        uint256 amount = undistributedFunds[recipient];
+        require(amount > 0, "No funds to withdraw");
+        undistributedFunds[recipient] = 0;
+        (bool success, ) = payable(recipient).call{value: amount}("");
+        require(success, "Transfer failed");
+        emit FundsWithdrawn(recipient, amount);
     }
 
     /// @notice Authorizes contract upgrades

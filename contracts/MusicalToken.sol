@@ -56,9 +56,9 @@ contract MusicalToken is
     error MaxRoyaltyShareExceed();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    // constructor() {
-    //     _disableInitializers();
-    // }
+    constructor() {
+        _disableInitializers();
+    }
 
     /// @notice Initializes the contract with an owner
     /// @param _initialOwner The initial owner of the contract
@@ -159,8 +159,8 @@ contract MusicalToken is
         uint _royaltySharePercentageInBPS
     ) external {
         if (
-           msg.sender != tokenRoyaltyManager[_tokenId] &&
-           msg.sender != marketplace
+            msg.sender != tokenRoyaltyManager[_tokenId] &&
+            msg.sender != marketplace
         ) {
             revert UnauthorizedAccess(msg.sender);
         }
@@ -172,11 +172,9 @@ contract MusicalToken is
             revert MaxRoyaltyShareExceed();
         }
 
+        delete royalties[_tokenId];
         RoyaltyInfo storage info = royalties[_tokenId];
         uint256 totalRoyaltyPercentage = 0;
-        delete info.recipients;
-        delete info.percentages;
-        
 
         for (uint256 i = 0; i < _percentages.length; i++) {
             totalRoyaltyPercentage += _percentages[i];
@@ -202,35 +200,6 @@ contract MusicalToken is
         );
     }
 
-    /// @notice Removes a royalty recipient from a token
-    /// @param _tokenId The ID of the token
-    /// @param _recipient The address of the recipient to remove
-    // function removeRoyaltyRecipient(
-    //     uint256 _tokenId,
-    //     address _recipient
-    // ) external {
-    //     if (msg.sender != tokenRoyaltyManager[_tokenId]) {
-    //         revert UnauthorizedAccess(msg.sender);
-    //     }
-
-    //     RoyaltyInfo storage info = royalties[_tokenId];
-    //     uint256 length = info.recipients.length;
-
-    //     for (uint256 i = 0; i < length; i++) {
-    //         if (info.recipients[i] == _recipient) {
-    //             info.totalPercentage -= info.percentages[i];
-    //             info.recipients[i] = info.recipients[length - 1];
-    //             info.percentages[i] = info.percentages[length - 1];
-    //             info.recipients.pop();
-    //             info.percentages.pop();
-    //             emit RoyaltyRecipientRemoved(_tokenId, _recipient);
-    //             return;
-    //         }
-    //     }
-
-    //     revert RecipientNotFound(_recipient);
-    // }
-
     /// @notice Transfers royalty management of a token to a new manager
     /// @param _tokenId The ID of the token
     /// @param _newManager The address of the new manager
@@ -246,7 +215,7 @@ contract MusicalToken is
         }
         address oldManager = tokenRoyaltyManager[_tokenId];
         tokenRoyaltyManager[_tokenId] = _newManager;
-        delete royalties[_tokenId];
+
         emit RoyaltyManagementTransferred(_tokenId, oldManager, _newManager);
     }
 
