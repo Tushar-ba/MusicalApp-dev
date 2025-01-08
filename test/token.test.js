@@ -25,13 +25,11 @@ describe("MusicalToken Contract", function () {
             const amount = 1
             const recipients = [user1.address,user2.address,user3.address];
             const percentages = [8000,1000,1000];
-            const royaltyPercentageInBPS = 2000;
-            expect(await musicalToken.mint(user1.address,amount,_uri,recipients,percentages,royaltyPercentageInBPS)).to.emit(musicalToken,"RoyaltyRecipientsAdded").withArgs(0,recipients,percentages,royaltyPercentageInBPS);
+            expect(await musicalToken.mint(user1.address,amount,_uri,recipients,percentages)).to.emit(musicalToken,"RoyaltyRecipientsAdded").withArgs(0,recipients,percentages);
             expect(await musicalToken.balanceOf(user1.address,0)).to.equal(amount);
             const info = await musicalToken.getRoyaltyInfo(0);
             expect(info.recipients).to.deep.equal(recipients);
             expect(info.percentages).to.deep.equal(percentages);
-            expect(info.royaltySharePercentageInBPS).to.equal(royaltyPercentageInBPS);
         })
         it("Should revert if the address field is empty", async function () {
             const _uri = "Hello";
@@ -39,9 +37,8 @@ describe("MusicalToken Contract", function () {
             const amount = 1
             const recipients = [user1.address,user2.address,user3.address];
             const percentages = [8000,1000,1000];
-            const royaltyPercentageInBPS = 2000;
             //console.log("AddressZero: ", await AddressZero.getAddress());
-            await expect(musicalToken.mint(AddressZero,amount, _uri,recipients,percentages,royaltyPercentageInBPS))
+            await expect(musicalToken.mint(AddressZero,amount, _uri,recipients,percentages))
                 .to.be.revertedWithCustomError(musicalToken,"InvalidAddress");
         });
         it("Should revert if there is a mismatch with recipients and percentages length",async function(){
@@ -49,29 +46,16 @@ describe("MusicalToken Contract", function () {
             const amount = 1
             const recipients = [user1.address,user2.address,user3.address];
             const percentages = [8000,1000,500,500];
-            const royaltyPercentageInBPS = 2000;
             //console.log("AddressZero: ", await AddressZero.getAddress());
-            await expect(musicalToken.mint(user1.address,amount, _uri,recipients,percentages,royaltyPercentageInBPS))
+            await expect(musicalToken.mint(user1.address,amount, _uri,recipients,percentages))
                 .to.be.revertedWithCustomError(musicalToken,"RecipientsAndPercentagesMismatch");
-        })
-        it("Should revert if the royaltyPercentageInBPS is more than the MAX_ROYALTY_PERCENTAGE",async function(){
-            const _uri = "Hello";
-            const AddressZero = ethers.ZeroAddress; 
-            const amount = 1
-            const recipients = [user1.address,user2.address,user3.address];
-            const percentages = [8000,1000,1000];
-            const royaltyPercentageInBPS = 3000;
-            await expect(musicalToken.mint(user1.address,amount, _uri,recipients,percentages,royaltyPercentageInBPS))
-                .to.be.revertedWithCustomError(musicalToken,"MaxRoyaltyShareExceed");
         })
         it("Should revert if the percentage is invalid",async function(){
             const _uri = "Hello";
-            const AddressZero = ethers.ZeroAddress; 
             const amount = 1
             const recipients = [user2.address,user3.address];
             const percentages = [1000,1000];
-            const royaltyPercentageInBPS = 2000;
-            await expect(musicalToken.mint(user1.address,amount, _uri,recipients,percentages,royaltyPercentageInBPS))
+            await expect(musicalToken.mint(user1.address,amount, _uri,recipients,percentages))
                 .to.be.revertedWithCustomError(musicalToken,"InvalidPercentage");
         })
     })
@@ -95,49 +79,37 @@ describe("MusicalToken Contract", function () {
             const recipients = [user1.address,user2.address,user3.address];
             const percentages = [8000,1000,1000];
             const royaltyPercentageInBPS = 2000;
-            await musicalToken.mint(user1.address,amount,_uri,recipients,percentages,royaltyPercentageInBPS);
+            await musicalToken.mint(user1.address,amount,_uri,recipients,percentages);
         })
         it("Should successfully update the royalty recipients",async function(){
             const updatedUserArry = [owner.address,updatedUser1.address,updatedUser2.address];
             const percentage = [6000,2000,2000];
-            const royaltyPercentageInBPS = 1000;
             const tokenId = 0;
             const info1 = await musicalToken.getRoyaltyInfo(0);
-            console.log("before",info1)
-            expect(await musicalToken.connect(user1).updateRoyaltyRecipients(tokenId,updatedUserArry,percentage,royaltyPercentageInBPS)).to.emit(musicalToken,"RoyaltyRecipientsAdded").withArgs(tokenId,updatedUser1,percentage,royaltyPercentageInBPS);
+            //console.log("before",info1)
+            expect(await musicalToken.connect(user1).updateRoyaltyRecipients(tokenId,updatedUserArry,percentage)).to.emit(musicalToken,"RoyaltyRecipientsAdded").withArgs(tokenId,updatedUser1,percentage);
             const info = await musicalToken.getRoyaltyInfo(0);
-            console.log("after",info)
+            //console.log("after",info)
             //expect(info.recipients).to.deep.equal(updatedUserArry);
             expect(info.percentages).to.deep.equal(percentage);
-            expect(info.royaltySharePercentageInBPS).to.equal(royaltyPercentageInBPS);
         })
         it("Should revert if the other than the token owner tries to update the token",async function(){
             const updatedUserArry = [owner.address,updatedUser1.address,updatedUser2.address];
             const percentage = [6000,2000,2000];
-            const royaltyPercentageInBPS = 1000;
             const tokenId = 0;
-            expect(await musicalToken.connect(user2).updateRoyaltyRecipients(tokenId,updatedUserArry,percentage,royaltyPercentageInBPS)).to.be.revertedWithCustomError(musicalToken,"UnauthorizedAccess");
+            await expect( musicalToken.connect(user2).updateRoyaltyRecipients(tokenId,updatedUserArry,percentage,)).to.be.revertedWithCustomError(musicalToken,"UnauthorizedAccess");
         })
         it("Should revert if the percentage and recipients length mismatches",async function(){
             const updatedUserArry = [updatedUser1.address,updatedUser2.address];
             const percentage = [6000,2000,2000];
-            const royaltyPercentageInBPS = 1000;
             const tokenId = 0;
-            expect(await musicalToken.connect(user1).updateRoyaltyRecipients(tokenId,updatedUserArry,percentage,royaltyPercentageInBPS)).to.be.revertedWithCustomError(musicalToken,"RecipientsAndPercentagesMismatch");
-        })
-        it("Should revert if royalty share percent in BPS exceeds 2000",async function(){
-            const updatedUserArry = [owner.address,updatedUser1.address,updatedUser2.address];
-            const percentage = [6000,2000,2000];
-            const royaltyPercentageInBPS = 3000;
-            const tokenId = 0;
-            expect(await musicalToken.connect(user1).updateRoyaltyRecipients(tokenId,updatedUserArry,percentage,royaltyPercentageInBPS)).to.be.revertedWithCustomError(musicalToken,"MaxRoyaltyShareExceed");
+            await expect( musicalToken.connect(user1).updateRoyaltyRecipients(tokenId,updatedUserArry,percentage)).to.be.revertedWithCustomError(musicalToken,"RecipientsAndPercentagesMismatch");
         })
         it("Should revert if the total percentage will not be equal to 10000 BPS",async function(){
             const updatedUserArry = [owner.address,updatedUser1.address,updatedUser2.address];
             const percentage = [6000,1000,1000];
-            const royaltyPercentageInBPS = 3000;
             const tokenId = 0;
-            expect(await musicalToken.connect(user1).updateRoyaltyRecipients(tokenId,updatedUserArry,percentage,royaltyPercentageInBPS)).to.be.revertedWithCustomError(musicalToken,"InvalidPercentage");
+            await expect( musicalToken.connect(user1).updateRoyaltyRecipients(tokenId,updatedUserArry,percentage)).to.be.revertedWithCustomError(musicalToken,"InvalidPercentage");
         })
     })
 
@@ -148,14 +120,12 @@ describe("MusicalToken Contract", function () {
         const amount = 1
         const recipients = [user1.address,user2.address,user3.address];
         const percentages = [8000,1000,1000];
-        const royaltyPercentageInBPS = 2000;
-        await musicalToken.mint(user1.address,amount,_uri,recipients,percentages,royaltyPercentageInBPS);
+        await musicalToken.mint(user1.address,amount,_uri,recipients,percentages);
  
         const info =await musicalToken.getRoyaltyInfo(0);
-        console.log(info)
+        //console.log(info)
         expect(info.recipients).to.deep.equal(recipients);
         expect(info.percentages).to.deep.equal(percentages);
-        expect(info.royaltySharePercentageInBPS).to.equal(royaltyPercentageInBPS)
     })
    })
 

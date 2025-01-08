@@ -27,11 +27,7 @@ interface IMusicalToken {
     )
         external
         view
-        returns (
-            address[] memory recipients,
-            uint256[] memory percentages,
-            uint256 totalPercentage
-        );
+        returns (address[] memory recipients, uint256[] memory percentages);
     function FEE_DENOMINATOR() external view returns (uint96);
     function transferRoyaltyManagement(
         uint256 tokenId,
@@ -40,7 +36,6 @@ interface IMusicalToken {
     function updateRoyaltyRecipients(
         uint256 _tokenId,
         address[] calldata _recipients,
-        uint256[] calldata _percentages,
-        uint _royaltySharePercentageInBPS
+        uint256[] calldata _percentages
     ) external;
 }

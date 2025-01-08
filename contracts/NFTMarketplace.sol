@@ -69,6 +69,7 @@ contract NFTMarketplace is
     error TokenAlreadyListed();
     error InvalidBuyer(address buyer);
     error InvalidPercentage(uint provided, uint required);
+    error MismatchedArrayPassed();
 
     event NFTListed(
         uint256 tokenId,
@@ -124,7 +125,7 @@ contract NFTMarketplace is
     );
 
     event PlatformFeeReceiverUpdated(address oldReceiver, address newReceiver);
-    event PlatforFlowReceived(address feeReceiver, uint256 amount);
+    event PlatformFeeReceived(address feeReceiver, uint256 amount);
 
     event ListingSellerUpdated(
         uint256 listingId,
@@ -262,6 +263,14 @@ contract NFTMarketplace is
                 revert NotTokenOwner(msg.sender);
             }
 
+            musicalToken.safeTransferFrom(
+                msg.sender,
+                address(this),
+                listing.tokenId,
+                _tokenAmount,
+                ""
+            );
+
             listing.amount += _tokenAmount;
         }
 
@@ -357,7 +366,7 @@ contract NFTMarketplace is
             }("");
             require(success, "Royalty transfer failed");
 
-            emit PlatforFlowReceived(platformFeeReceiver, amountForPlatformFee);
+            emit PlatformFeeReceived(platformFeeReceiver, amountForPlatformFee);
             //distribute the splits
             amountForSplits =
                 (totalPrice * firstTimeSaleFeeDetails.splits) /
@@ -368,7 +377,7 @@ contract NFTMarketplace is
             amountForPlatformFee =
                 (totalPrice * resellFeeDetails.platformFee) /
                 musicalToken.FEE_DENOMINATOR();
-            emit PlatforFlowReceived(platformFeeReceiver, amountForPlatformFee);
+            emit PlatformFeeReceived(platformFeeReceiver, amountForPlatformFee);
             //distribute the splits
             amountForSplits =
                 (totalPrice * resellFeeDetails.splits) /
@@ -402,14 +411,14 @@ contract NFTMarketplace is
             ""
         );
 
+        emit NFTPurchased(listing.tokenId, _amount, totalPrice, msg.sender);
+
         if (listing.amount == _amount) {
+            delete isTokenListed[listing.seller][listing.tokenId];
             delete listings[_listingId];
-            delete isTokenListed[msg.sender][listing.tokenId];
         } else {
             listings[_listingId].amount -= _amount;
         }
-
-        emit NFTPurchased(listing.tokenId, _amount, totalPrice, msg.sender);
     }
 
     /// @notice Facilitates the purchase of a special listing for a token and updates its royalty details
@@ -418,16 +427,19 @@ contract NFTMarketplace is
     /// @param _tokenId The ID of the token being purchased
     /// @param _recipients The array of addresses to receive royalties
     /// @param _percentages The array of percentages (in basis points) for each royalty recipient
-    /// @param _royaltySharePercentageInBPS The total percentage of the sale to be distributed as royalties (in basis points)
     function specialBuy(
         uint256 _tokenId,
         address[] calldata _recipients,
-        uint256[] calldata _percentages,
-        uint _royaltySharePercentageInBPS
+        uint256[] calldata _percentages
     ) external payable nonReentrant {
         SpecialListing memory specialListing = specialListings[_tokenId];
         if (specialListing.price == 0) {
             revert NFTNotListed(_tokenId);
+        }
+
+        // Validate lengths before updating royalty recipients
+        if (_recipients.length != _percentages.length) {
+            revert MismatchedArrayPassed();
         }
 
         uint msgValue = msg.value;
@@ -458,15 +470,31 @@ contract NFTMarketplace is
         );
 
         //transfer the royalty management
-        //is this step old royalty configuration will be deleted
         musicalToken.transferRoyaltyManagement(_tokenId, msg.sender);
 
-        //transfer the royalty details
+        // If both arrays are empty, default to full royalty for msg.sender
+        // Build final arrays for recipients & percentages
+        address[] memory finalRecipients;
+        uint256[] memory finalPercentages;
+
+        // If both are empty, default to [msg.sender, 100% bps]
+        if (_recipients.length == 0 && _percentages.length == 0) {
+            finalRecipients = new address[](1);
+            finalRecipients[0] = msg.sender;
+
+            finalPercentages = new uint256[](1);
+            finalPercentages[0] = 10000; // 100% in basis points
+        } else {
+            // Use the provided arrays
+            finalRecipients = _recipients;
+            finalPercentages = _percentages;
+        }
+
+        // Update royalty recipients
         musicalToken.updateRoyaltyRecipients(
             _tokenId,
-            _recipients,
-            _percentages,
-            _royaltySharePercentageInBPS
+            finalRecipients,
+            finalPercentages
         );
 
         //transfer the amount to seller
@@ -498,8 +526,7 @@ contract NFTMarketplace is
     ) internal returns (uint256 remainingAmount) {
         (
             address[] memory recipients,
-            uint256[] memory percentages,
-
+            uint256[] memory percentages
         ) = musicalToken.getRoyaltyInfo(_tokenId);
 
         uint256 totalRoyaltiesDistributed = 0;
@@ -555,8 +582,8 @@ contract NFTMarketplace is
             listing.amount
         );
         // Remove the listing
+        delete isTokenListed[listing.seller][listing.tokenId];
         delete listings[_listingId];
-        delete isTokenListed[msg.sender][listing.tokenId];
     }
 
     /// @notice Cancels a listing
@@ -591,7 +618,7 @@ contract NFTMarketplace is
     /// @param _platformFee The percentage (in basis points) allocated as the platform fee
     /// @param _splits The percentage (in basis points) allocated to royalty splits
     /// @param _sellerShare The percentage (in basis points) allocated to the seller
-    function updateFirstTimeSale(
+    function updateFirstTimeSaleFee(
         uint256 _platformFee,
         uint256 _splits,
         uint256 _sellerShare
@@ -622,7 +649,7 @@ contract NFTMarketplace is
     /// @param _platformFee The percentage (in basis points) allocated as the platform fee
     /// @param _splits The percentage (in basis points) allocated to royalty splits
     /// @param _sellerShare The percentage (in basis points) allocated to the seller
-    function updateResell(
+    function updateResellFee(
         uint256 _platformFee,
         uint256 _splits,
         uint256 _sellerShare

@@ -20,14 +20,12 @@ contract MusicalToken is
 {
     uint256 public nextTokenId;
     uint256 public constant HUNDRED_PERCENT_IN_BPS = 10000; //100%
-    uint256 public constant MAX_ROYALTY_PERCENTAGE = 2000; // max 20% can be distributed as royalty
     uint96 public constant FEE_DENOMINATOR = 10000;
     address public marketplace;
 
     struct RoyaltyInfo {
         address[] recipients;
         uint256[] percentages;
-        uint256 royaltySharePercentageInBPS;
     }
 
     mapping(uint256 => address) public tokenRoyaltyManager;
@@ -36,8 +34,7 @@ contract MusicalToken is
     event RoyaltyRecipientsAdded(
         uint256 tokenId,
         address[] recipients,
-        uint256[] percentages,
-        uint256 royaltySharePercentageInBPS
+        uint256[] percentages
     );
     event RoyaltyRecipientRemoved(uint256 tokenId, address recipient);
     event RoyaltyManagementTransferred(
@@ -78,14 +75,13 @@ contract MusicalToken is
     /// @param _tokenURI The URI for the token's metadata
     /// @param _recipients Array of addresses to receive royalties
     /// @param _percentages Array of percentages corresponding to each recipient
-    /// @param _royaltySharePercentageInBPS percentage share for secondary sell
+
     function mint(
         address _to,
         uint256 _amount,
         string memory _tokenURI,
         address[] calldata _recipients,
-        uint256[] calldata _percentages,
-        uint _royaltySharePercentageInBPS
+        uint256[] calldata _percentages
     ) external {
         if (address(_to) == address(0)) {
             revert InvalidAddress(_to);
@@ -94,9 +90,6 @@ contract MusicalToken is
             revert RecipientsAndPercentagesMismatch();
         }
 
-        if (_royaltySharePercentageInBPS > MAX_ROYALTY_PERCENTAGE) {
-            revert MaxRoyaltyShareExceed();
-        }
         uint256 tokenId = nextTokenId++;
         _mint(_to, tokenId, _amount, "");
 
@@ -120,14 +113,8 @@ contract MusicalToken is
             info.recipients.push(_recipients[i]);
             info.percentages.push(_percentages[i]);
         }
-        info.royaltySharePercentageInBPS = _royaltySharePercentageInBPS;
 
-        emit RoyaltyRecipientsAdded(
-            tokenId,
-            _recipients,
-            _percentages,
-            _royaltySharePercentageInBPS
-        );
+        emit RoyaltyRecipientsAdded(tokenId, _recipients, _percentages);
     }
 
     /// @notice to update the base uri contract
@@ -147,16 +134,14 @@ contract MusicalToken is
     }
 
     /// @notice update royalty recipients and percentages to a token
-    /// @dev Ensures the total percentage does not exceed MAX_ROYALTY_PERCENTAGE
     /// @param _tokenId The ID of the token
     /// @param _recipients Array of addresses to receive royalties
     /// @param _percentages Array of percentages corresponding to each recipient
-    /// @param _royaltySharePercentageInBPS percentage share for secondary sell
+
     function updateRoyaltyRecipients(
         uint256 _tokenId,
         address[] calldata _recipients,
-        uint256[] calldata _percentages,
-        uint _royaltySharePercentageInBPS
+        uint256[] calldata _percentages
     ) external {
         if (
             msg.sender != tokenRoyaltyManager[_tokenId] &&
@@ -166,10 +151,6 @@ contract MusicalToken is
         }
         if (_recipients.length != _percentages.length) {
             revert RecipientsAndPercentagesMismatch();
-        }
-
-        if (_royaltySharePercentageInBPS > MAX_ROYALTY_PERCENTAGE) {
-            revert MaxRoyaltyShareExceed();
         }
 
         delete royalties[_tokenId];
@@ -190,14 +171,8 @@ contract MusicalToken is
             info.recipients.push(_recipients[i]);
             info.percentages.push(_percentages[i]);
         }
-        info.royaltySharePercentageInBPS = _royaltySharePercentageInBPS;
 
-        emit RoyaltyRecipientsAdded(
-            _tokenId,
-            _recipients,
-            _percentages,
-            _royaltySharePercentageInBPS
-        );
+        emit RoyaltyRecipientsAdded(_tokenId, _recipients, _percentages);
     }
 
     /// @notice Transfers royalty management of a token to a new manager
@@ -223,24 +198,16 @@ contract MusicalToken is
     /// @param _tokenId The ID of the token
     /// @return recipients Array of royalty recipient addresses
     /// @return percentages Array of royalty percentages
-    /// @return royaltySharePercentageInBPS Total royalty percentage in basis points
+
     function getRoyaltyInfo(
         uint256 _tokenId
     )
         external
         view
-        returns (
-            address[] memory recipients,
-            uint256[] memory percentages,
-            uint256 royaltySharePercentageInBPS
-        )
+        returns (address[] memory recipients, uint256[] memory percentages)
     {
         RoyaltyInfo memory info = royalties[_tokenId];
-        return (
-            info.recipients,
-            info.percentages,
-            info.royaltySharePercentageInBPS
-        );
+        return (info.recipients, info.percentages);
     }
 
     /// @notice Overrides the uri function to use ERC155URIStorage
