@@ -17,8 +17,6 @@ describe("MusicalToken Contract", function () {
     const marketplace = await upgrades.deployProxy(MarketPlaceContract,[owner.address,musicalToken.target,owner.address],{initializer:"initialize",});
     await musicalToken.setMarketplaceContractAddress(marketplace.target);
   });
-
-
     describe("Minting the token",function(){
         it("should mint a token ",async function(){
             const _uri= "Hello"
