@@ -20,12 +20,13 @@ describe("MusicalToken Contract", function () {
     describe("Minting the token",function(){
         it("should mint a token ",async function(){
             const _uri= "Hello"
-            const amount = 1
+            const amount = 4
             const recipients = [user1.address,user2.address,user3.address];
             const percentages = [8000,1000,1000];
             expect(await musicalToken.mint(user1.address,amount,_uri,recipients,percentages)).to.emit(musicalToken,"RoyaltyRecipientsAdded").withArgs(0,recipients,percentages);
-            expect(await musicalToken.balanceOf(user1.address,0)).to.equal(amount);
-            const info = await musicalToken.getRoyaltyInfo(0);
+            console.log("this")
+            expect(await musicalToken.balanceOf(user1.address,1)).to.equal(amount)
+            const info = await musicalToken.getRoyaltyInfo(1);
             expect(info.recipients).to.deep.equal(recipients);
             expect(info.percentages).to.deep.equal(percentages);
         })
@@ -82,11 +83,11 @@ describe("MusicalToken Contract", function () {
         it("Should successfully update the royalty recipients",async function(){
             const updatedUserArry = [owner.address,updatedUser1.address,updatedUser2.address];
             const percentage = [6000,2000,2000];
-            const tokenId = 0;
-            const info1 = await musicalToken.getRoyaltyInfo(0);
+            const tokenId = 1;
+            const info1 = await musicalToken.getRoyaltyInfo(1);
             //console.log("before",info1)
             expect(await musicalToken.connect(user1).updateRoyaltyRecipients(tokenId,updatedUserArry,percentage)).to.emit(musicalToken,"RoyaltyRecipientsAdded").withArgs(tokenId,updatedUser1,percentage);
-            const info = await musicalToken.getRoyaltyInfo(0);
+            const info = await musicalToken.getRoyaltyInfo(1);
             //console.log("after",info)
             //expect(info.recipients).to.deep.equal(updatedUserArry);
             expect(info.percentages).to.deep.equal(percentage);
@@ -100,13 +101,13 @@ describe("MusicalToken Contract", function () {
         it("Should revert if the percentage and recipients length mismatches",async function(){
             const updatedUserArry = [updatedUser1.address,updatedUser2.address];
             const percentage = [6000,2000,2000];
-            const tokenId = 0;
+            const tokenId = 1;
             await expect( musicalToken.connect(user1).updateRoyaltyRecipients(tokenId,updatedUserArry,percentage)).to.be.revertedWithCustomError(musicalToken,"RecipientsAndPercentagesMismatch");
         })
         it("Should revert if the total percentage will not be equal to 10000 BPS",async function(){
             const updatedUserArry = [owner.address,updatedUser1.address,updatedUser2.address];
             const percentage = [6000,1000,1000];
-            const tokenId = 0;
+            const tokenId = 1;
             await expect( musicalToken.connect(user1).updateRoyaltyRecipients(tokenId,updatedUserArry,percentage)).to.be.revertedWithCustomError(musicalToken,"InvalidPercentage");
         })
     })
@@ -119,11 +120,28 @@ describe("MusicalToken Contract", function () {
         const recipients = [user1.address,user2.address,user3.address];
         const percentages = [8000,1000,1000];
         await musicalToken.mint(user1.address,amount,_uri,recipients,percentages);
- 
-        const info =await musicalToken.getRoyaltyInfo(0);
+        const info =await musicalToken.getRoyaltyInfo(1);
         //console.log(info)
         expect(info.recipients).to.deep.equal(recipients);
         expect(info.percentages).to.deep.equal(percentages);
+    })
+   })
+   describe("Setting MarketPlace contract",function(){
+    let marketplaceV4;
+    beforeEach(async function(){
+    const MarketPlaceContractV4 = await ethers.getContractFactory("NFTMarketplace");
+    marketplaceV4 = await upgrades.deployProxy(MarketPlaceContractV4,[owner.address,musicalToken.target,owner.address],{initializer:"initialize",});
+    })
+    it("should allow the owner to change marketplace",async function(){
+        expect(await musicalToken.connect(owner).setMarketplaceContractAddress(marketplaceV4.target));
+        expect (await musicalToken.marketplace()).to.be.equal(marketplaceV4.target);
+    })
+    it("should revert if anyone other than the owner tries to update the marketplace address",async function(){
+        await expect( musicalToken.connect(user1).setMarketplaceContractAddress(marketplaceV4.target)).to.be.revertedWithCustomError(musicalToken,"OwnableUnauthorizedAccount");
+    })
+    it.skip("should revert if the owner gives a ) address",async function(){
+         expect( await musicalToken.connect(owner).setMarketplaceContractAddress(ethers.ZeroAddress))
+         console.log(await musicalToken.marketplace())
     })
    })
 
@@ -200,4 +218,3 @@ describe("MusicalToken Contract", function () {
     });
 });
 });
-

@@ -53,9 +53,9 @@ contract MusicalToken is
     error MaxRoyaltyShareExceed();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
-        _disableInitializers();
-    }
+    // constructor() {
+    //     _disableInitializers();
+    // }
 
     /// @notice Initializes the contract with an owner
     /// @param _initialOwner The initial owner of the contract
@@ -90,7 +90,7 @@ contract MusicalToken is
             revert RecipientsAndPercentagesMismatch();
         }
 
-        uint256 tokenId = nextTokenId++;
+        uint256 tokenId = ++nextTokenId;
         _mint(_to, tokenId, _amount, "");
 
         _setURI(tokenId, _tokenURI);
@@ -198,7 +198,6 @@ contract MusicalToken is
     /// @param _tokenId The ID of the token
     /// @return recipients Array of royalty recipient addresses
     /// @return percentages Array of royalty percentages
-
     function getRoyaltyInfo(
         uint256 _tokenId
     )

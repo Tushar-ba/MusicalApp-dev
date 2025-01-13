@@ -21,6 +21,7 @@ contract NFTMarketplaceV2 is
 {
     IMusicalToken public musicalToken;
     uint256 public listingId;
+    uint256 public exchangeId;
 
     // Fee configurations
     FeeConfig public firstTimeSaleFeeDetails;
@@ -41,6 +42,19 @@ contract NFTMarketplaceV2 is
         address seller;
         uint256 price;
         uint256 amount;
+        bool isFirstTimeListing;
+    }
+
+    struct NftExchange {
+        uint256 exchangeId;
+        uint256 baseTokenId;
+        uint256 baseTokenAmount;
+        uint256 counterTokenId;
+        uint256 counterTokenAmount;
+        bool baseUserApproved;
+        bool counterUserApproved;
+        address baseUserAddress;
+        address counterUserAddress;
     }
 
     struct FeeConfig {
@@ -50,9 +64,11 @@ contract NFTMarketplaceV2 is
     }
     mapping(uint256 => SpecialListing) public specialListings;
     mapping(uint256 => Listing) public listings; // Maps listing ID to Listing
+    mapping(uint256 => NftExchange) public exchangeItems; // exchange Id => exchange items
     //itemOwner => tokenId => result (listingId)
     mapping(address => mapping(uint => uint)) public isTokenListed;
     mapping(uint => bool) public isTokenListedBeforeInMarketplace;
+    mapping(uint => bool) public isTokenListedBeforeForSpecialListing;
 
     mapping(address => uint256) public undistributedFunds;
 
@@ -70,6 +86,10 @@ contract NFTMarketplaceV2 is
     error InvalidBuyer(address buyer);
     error InvalidPercentage(uint provided, uint required);
     error MismatchedArrayPassed();
+    error InvalidNftExchange();
+    error NotValidNftExchangeParticipant();
+    error InvalidCounterToken();
+    error InvalidBaseToken();
 
     event NFTListed(
         uint256 tokenId,
@@ -113,7 +133,7 @@ contract NFTMarketplaceV2 is
     event SpecialNFTListingCanceled(uint256 tokenId, address seller);
     event RoyaltyDistributed(
         uint totalAmount,
-        uint royaltytoBeDistributed,
+        uint royaltyToBeDistributed,
         address recipient
     );
 
@@ -141,6 +161,18 @@ contract NFTMarketplaceV2 is
 
     event RoyaltyDistributionFailed(address recipient, uint256 amount);
     event FundsWithdrawn(address account, uint256 amount);
+
+    event RegisteredNftForExchange(
+        uint exchangeId,
+        address UserAddress,
+        uint TokenId,
+        uint TokenAmount
+    );
+
+    event NftForExchangeCanceled(uint exchangeId);
+    event NftForExchangeApproved(uint exchangeId, address approver);
+    event NftForExchangeSucceed(uint exchangeId);
+    event NftForExchangeRemoved(uint exchangeId);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     // constructor() {
@@ -315,8 +347,13 @@ contract NFTMarketplaceV2 is
             tokenId: _tokenId,
             seller: msg.sender,
             price: _price,
-            amount: tokenBalance
+            amount: tokenBalance,
+            isFirstTimeListing: !isTokenListedBeforeForSpecialListing[_tokenId]
         });
+
+        if (!isTokenListedBeforeForSpecialListing[_tokenId]) {
+            isTokenListedBeforeForSpecialListing[_tokenId] = true;
+        }
 
         emit NFTListedSpecial(_tokenId, msg.sender, _price, tokenBalance);
     }
@@ -356,43 +393,51 @@ contract NFTMarketplaceV2 is
         uint amountForSplits;
         uint amountForSeller;
         if (listing.isFirstTimeListing) {
-            //pay the platformFee
+            //calculate the platformFee
             amountForPlatformFee =
                 (totalPrice * firstTimeSaleFeeDetails.platformFee) /
                 musicalToken.FEE_DENOMINATOR();
 
-            (bool success, ) = payable(platformFeeReceiver).call{
-                value: amountForPlatformFee
-            }("");
-            require(success, "Royalty transfer failed");
-
-            emit PlatformFeeReceived(platformFeeReceiver, amountForPlatformFee);
-            //distribute the splits
+            //calculate the splits
             amountForSplits =
                 (totalPrice * firstTimeSaleFeeDetails.splits) /
                 musicalToken.FEE_DENOMINATOR();
-            _distributeRoyalties(listing.tokenId, amountForSplits);
         } else {
-            //pay the platformFee
+            //calculate the platformFee
             amountForPlatformFee =
                 (totalPrice * resellFeeDetails.platformFee) /
                 musicalToken.FEE_DENOMINATOR();
-            emit PlatformFeeReceived(platformFeeReceiver, amountForPlatformFee);
-            //distribute the splits
+
+            //calculate the splits
             amountForSplits =
                 (totalPrice * resellFeeDetails.splits) /
                 musicalToken.FEE_DENOMINATOR();
 
-            //seller share
+            //calculate seller share
             amountForSeller =
                 (totalPrice * resellFeeDetails.sellerShare) /
                 musicalToken.FEE_DENOMINATOR();
+        }
 
-            _distributeRoyalties(listing.tokenId, amountForSplits);
+        //pay the recipients
 
-            (bool success, ) = payable(listing.seller).call{
-                value: amountForSeller
-            }("");
+        //platform
+        (bool success, ) = payable(platformFeeReceiver).call{
+            value: amountForPlatformFee
+        }("");
+        require(success, "platform fee transfer failed");
+
+        emit PlatformFeeReceived(platformFeeReceiver, amountForPlatformFee);
+
+        //splits
+
+        _distributeRoyalties(listing.tokenId, amountForSplits);
+
+        //seller
+        if (amountForSeller != 0) {
+            (success, ) = payable(listing.seller).call{value: amountForSeller}(
+                ""
+            );
             require(success, "Royalty transfer failed");
 
             emit sellerAmountReceived(
@@ -497,21 +542,215 @@ contract NFTMarketplaceV2 is
             finalPercentages
         );
 
-        //transfer the amount to seller
+        //transfer the amount to platform and seller
+        uint amountForPlatformFee;
 
-        (bool success, ) = payable(specialListing.seller).call{value: msgValue}(
-            ""
-        );
-        require(success, "Royalty transfer failed");
+        if (specialListing.isFirstTimeListing) {
+            amountForPlatformFee =
+                (specialListing.price * firstTimeSaleFeeDetails.platformFee) /
+                musicalToken.FEE_DENOMINATOR();
+        } else {
+            amountForPlatformFee =
+                (specialListing.price * resellFeeDetails.platformFee) /
+                musicalToken.FEE_DENOMINATOR();
+        }
+
+        uint amountForSeller = specialListing.price - amountForPlatformFee;
+
+        (bool success, ) = payable(platformFeeReceiver).call{
+            value: amountForPlatformFee
+        }("");
+        require(success, "platform fee transfer failed");
+
+        emit PlatformFeeReceived(platformFeeReceiver, amountForPlatformFee);
+
+        (success, ) = payable(specialListing.seller).call{
+            value: amountForSeller
+        }("");
+        require(success, "seller transfer failed");
 
         emit SpecialPurchased(
             _tokenId,
-            msgValue,
+            amountForSeller,
             specialListing.seller,
             msg.sender
         );
         // Remove the listing
         delete specialListings[_tokenId];
+    }
+
+    function registerNftExchange(
+        uint _tokenId,
+        uint _amount,
+        uint _exchangeId
+    ) external nonReentrant {
+        if (_amount == 0) {
+            revert InvalidZeroParams();
+        }
+        if (musicalToken.balanceOf(msg.sender, _tokenId) < _amount) {
+            revert NotTokenOwner(msg.sender);
+        }
+
+        if (!musicalToken.isApprovedForAll(msg.sender, address(this))) {
+            revert MarketplaceNotApproved(msg.sender);
+        }
+
+        // Transfer the NFT to the marketplace contract
+        musicalToken.safeTransferFrom(
+            msg.sender,
+            address(this),
+            _tokenId,
+            _amount,
+            ""
+        );
+        //register in new exchange
+        if (_exchangeId == 0) {
+            exchangeId++;
+            exchangeItems[exchangeId] = NftExchange({
+                exchangeId: exchangeId,
+                baseTokenId: _tokenId,
+                baseTokenAmount: _amount,
+                counterTokenId: 0,
+                counterTokenAmount: 0,
+                baseUserApproved: false,
+                counterUserApproved: false,
+                baseUserAddress: msg.sender,
+                counterUserAddress: address(0)
+            });
+
+            emit RegisteredNftForExchange(
+                exchangeId,
+                msg.sender,
+                _tokenId,
+                _amount
+            );
+        } else {
+            //register in old exchange
+            NftExchange storage exchangeItem = exchangeItems[_exchangeId];
+
+            // Revert if both slots are filled or both are empty
+            if (
+                (exchangeItem.baseTokenId == 0) ==
+                (exchangeItem.counterTokenId == 0)
+            ) {
+                revert InvalidNftExchange();
+            }
+            if (exchangeItem.baseTokenId == 0) {
+                exchangeItem.baseTokenId = _tokenId;
+                exchangeItem.baseTokenAmount = _amount;
+                exchangeItem.baseUserAddress = msg.sender;
+            } else {
+                exchangeItem.counterTokenId = _tokenId;
+                exchangeItem.counterTokenAmount = _amount;
+                exchangeItem.counterUserAddress = msg.sender;
+            }
+
+            emit RegisteredNftForExchange(
+                _exchangeId,
+                msg.sender,
+                _tokenId,
+                _amount
+            );
+        }
+    }
+
+    // Approve participation in an exchange
+    function approveNftForExchange(uint256 _exchangeId) external nonReentrant {
+        NftExchange storage exchangeItem = exchangeItems[_exchangeId];
+        if (exchangeItem.exchangeId == 0) {
+            revert InvalidNftExchange();
+        }
+
+        if (msg.sender == exchangeItem.baseUserAddress) {
+            if (exchangeItem.counterTokenId == 0) {
+                revert InvalidCounterToken();
+            }
+            exchangeItem.baseUserApproved = true;
+        } else if (msg.sender == exchangeItem.counterUserAddress) {
+            if (exchangeItem.baseTokenId == 0) {
+                revert InvalidBaseToken();
+            }
+            exchangeItem.counterUserApproved = true;
+        } else {
+            revert NotValidNftExchangeParticipant();
+        }
+        emit NftForExchangeApproved(_exchangeId, msg.sender);
+
+        // if both the party agree then transfer the nft
+        if (exchangeItem.baseUserApproved && exchangeItem.counterUserApproved) {
+            //transfer the nft vice-versa
+            // Transfer the NFT to the base user
+            musicalToken.safeTransferFrom(
+                address(this),
+                exchangeItem.baseUserAddress,
+                exchangeItem.counterTokenId,
+                exchangeItem.counterTokenAmount,
+                ""
+            );
+
+            // Transfer the NFT to the counter user
+            musicalToken.safeTransferFrom(
+                address(this),
+                exchangeItem.counterUserAddress,
+                exchangeItem.baseTokenId,
+                exchangeItem.baseTokenAmount,
+                ""
+            );
+
+            delete exchangeItems[_exchangeId];
+
+            emit NftForExchangeSucceed(_exchangeId);
+        }
+    }
+
+    // Cancel an exchange
+    function cancelNftExchange(uint256 _exchangeId) external nonReentrant {
+        NftExchange storage exchangeItem = exchangeItems[_exchangeId];
+        if (exchangeItem.exchangeId == 0) {
+            revert InvalidNftExchange();
+        }
+
+        if (msg.sender == exchangeItem.baseUserAddress) {
+            // Transfer the NFT to the user
+            musicalToken.safeTransferFrom(
+                address(this),
+                msg.sender,
+                exchangeItem.baseTokenId,
+                exchangeItem.baseTokenAmount,
+                ""
+            );
+
+            exchangeItem.baseTokenId = 0;
+            exchangeItem.baseTokenAmount = 0;
+            exchangeItem.baseUserApproved = false;
+            exchangeItem.baseUserAddress = address(0);
+
+            emit NftForExchangeCanceled(_exchangeId);
+        } else if (msg.sender == exchangeItem.counterUserAddress) {
+            // Transfer the NFT to the  user
+            musicalToken.safeTransferFrom(
+                address(this),
+                msg.sender,
+                exchangeItem.counterTokenId,
+                exchangeItem.counterTokenAmount,
+                ""
+            );
+
+            exchangeItem.counterTokenId = 0;
+            exchangeItem.counterTokenAmount = 0;
+            exchangeItem.counterUserApproved = false;
+            exchangeItem.counterUserAddress = address(0);
+
+            emit NftForExchangeCanceled(_exchangeId);
+        } else {
+            revert NotValidNftExchangeParticipant();
+        }
+
+        //if both the party canceled the nft for exchange the delete it
+        if (exchangeItem.counterTokenId == 0 && exchangeItem.baseTokenId == 0) {
+            delete exchangeItems[_exchangeId];
+            emit NftForExchangeRemoved(_exchangeId);
+        }
     }
 
     /// @notice Distributes royalties for a token sale to the respective recipients
