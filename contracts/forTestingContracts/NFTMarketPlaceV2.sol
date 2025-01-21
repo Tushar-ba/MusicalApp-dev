@@ -22,6 +22,8 @@ contract NFTMarketplaceV2 is
     IMusicalToken public musicalToken;
     uint256 public listingId;
     uint256 public exchangeId;
+    uint256 public airdropId;
+    uint256 public maxNFTCap;
 
     // Fee configurations
     FeeConfig public firstTimeSaleFeeDetails;
@@ -35,6 +37,13 @@ contract NFTMarketplaceV2 is
         uint256 price;
         uint256 amount;
         bool isFirstTimeListing;
+    }
+
+    struct Airdrop {
+        address owner;
+        uint256 tokenId;
+        uint256 remainingTokenAmount;
+        uint totalTokenAmount;
     }
 
     struct SpecialListing {
@@ -71,6 +80,9 @@ contract NFTMarketplaceV2 is
     mapping(uint => bool) public isTokenListedBeforeForSpecialListing;
 
     mapping(address => uint256) public undistributedFunds;
+    mapping(uint256 => Airdrop) public airdrops;
+    // airdropId => claimer address => result
+    mapping(uint256 => mapping(address => bool)) public isAirdropClaimed;
 
     // Errors
     error NotTokenOwner(address caller);
@@ -90,6 +102,9 @@ contract NFTMarketplaceV2 is
     error NotValidNftExchangeParticipant();
     error InvalidCounterToken();
     error InvalidBaseToken();
+    error CannotDelistFirstTimeListings();
+    error InvalidAirdrop(uint airdropId);
+    error AirDropAlreadyClaimed();
 
     event NFTListed(
         uint256 tokenId,
@@ -173,6 +188,14 @@ contract NFTMarketplaceV2 is
     event NftForExchangeApproved(uint exchangeId, address approver);
     event NftForExchangeSucceed(uint exchangeId);
     event NftForExchangeRemoved(uint exchangeId);
+    event MaxNFTCapUpdated(uint256 newCap);
+    event AirdropRegistered(
+        address owner,
+        uint tokenId,
+        uint tokenAmount,
+        uint airdropId
+    );
+    event AirdropClaimed(uint airdropId, uint tokenId, uint airdropAmount);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     // constructor() {
@@ -206,6 +229,7 @@ contract NFTMarketplaceV2 is
             sellerShare: 9000 // 90%
         });
         platformFeeReceiver = _platformFeeReceiver;
+        maxNFTCap = 5;
     }
 
     /// @notice Lists an NFT for sale
@@ -213,18 +237,26 @@ contract NFTMarketplaceV2 is
     /// @param _price The sale price of the token in Wei
     /// @param _amount Amount Of token for sale
     function listNFT(
+        address _seller,
         uint256 _tokenId,
         uint256 _price,
         uint256 _amount
     ) external {
-        if (musicalToken.balanceOf(msg.sender, _tokenId) < _amount) {
-            revert NotTokenOwner(msg.sender);
+        address seller;
+        if (msg.sender == address(musicalToken)) {
+            seller = _seller;
+        } else {
+            seller = msg.sender;
         }
 
-        if (!musicalToken.isApprovedForAll(msg.sender, address(this))) {
-            revert MarketplaceNotApproved(msg.sender);
+        if (musicalToken.balanceOf(seller, _tokenId) < _amount) {
+            revert NotTokenOwner(seller);
         }
-        if (isTokenListed[msg.sender][_tokenId] != 0) {
+
+        if (!musicalToken.isApprovedForAll(seller, address(this))) {
+            revert MarketplaceNotApproved(seller);
+        }
+        if (isTokenListed[seller][_tokenId] != 0) {
             revert TokenAlreadyListed();
         }
 
@@ -234,7 +266,7 @@ contract NFTMarketplaceV2 is
 
         // Transfer the NFT to the marketplace contract
         musicalToken.safeTransferFrom(
-            msg.sender,
+            seller,
             address(this),
             _tokenId,
             _amount,
@@ -245,20 +277,20 @@ contract NFTMarketplaceV2 is
         listingId++;
 
         listings[listingId] = Listing({
-            seller: msg.sender,
+            seller: seller,
             tokenId: _tokenId,
             price: _price,
             amount: _amount,
             isFirstTimeListing: !isTokenListedBeforeInMarketplace[_tokenId]
         });
 
-        isTokenListed[msg.sender][_tokenId] = listingId;
+        isTokenListed[seller][_tokenId] = listingId;
 
         if (!isTokenListedBeforeInMarketplace[_tokenId]) {
             isTokenListedBeforeInMarketplace[_tokenId] = true;
         }
 
-        emit NFTListed(_tokenId, msg.sender, _price, _amount, listingId);
+        emit NFTListed(_tokenId, seller, _price, _amount, listingId);
     }
 
     /// @notice Updates the listing details
@@ -313,6 +345,50 @@ contract NFTMarketplaceV2 is
             listing.amount,
             _listingId
         );
+    }
+
+    function registerAirdrop(
+        address _owner,
+        uint _tokenId,
+        uint _amount
+    ) external {
+        address airdropOwner;
+
+        if (msg.sender == address(musicalToken)) {
+            airdropOwner = _owner;
+        } else {
+            airdropOwner = msg.sender;
+        }
+
+        if (musicalToken.balanceOf(airdropOwner, _tokenId) < _amount) {
+            revert NotTokenOwner(airdropOwner);
+        }
+
+        if (!musicalToken.isApprovedForAll(airdropOwner, address(this))) {
+            revert MarketplaceNotApproved(airdropOwner);
+        }
+
+        if (_amount == 0) {
+            revert InvalidZeroParams();
+        }
+
+        // Transfer the NFT to the marketplace contract
+        musicalToken.safeTransferFrom(
+            airdropOwner,
+            address(this),
+            _tokenId,
+            _amount,
+            ""
+        );
+
+        airdrops[++airdropId] = Airdrop({
+            owner: airdropOwner,
+            tokenId: _tokenId,
+            remainingTokenAmount: _amount,
+            totalTokenAmount: _amount
+        });
+
+        emit AirdropRegistered(airdropOwner, _tokenId, _amount, airdropId);
     }
 
     /// @notice to transfer the token managerRole .To handle royalty of the contract
@@ -380,6 +456,14 @@ contract NFTMarketplaceV2 is
 
         if (listing.seller == msg.sender) {
             revert InvalidBuyer(msg.sender);
+        }
+
+        uint256 buyerCurrentBalance = musicalToken.balanceOf(
+            msg.sender,
+            listing.tokenId
+        );
+        if (buyerCurrentBalance + _amount > maxNFTCap) {
+            revert("Purchase exceeds max NFT cap");
         }
 
         uint msgValue = msg.value;
@@ -579,6 +663,34 @@ contract NFTMarketplaceV2 is
         delete specialListings[_tokenId];
     }
 
+    function claimAirdrops(uint _airdropId) external nonReentrant {
+        Airdrop storage airdrop = airdrops[_airdropId];
+        if (airdrop.remainingTokenAmount == 0) {
+            revert InvalidAirdrop(_airdropId);
+        }
+
+        if (isAirdropClaimed[_airdropId][msg.sender]) {
+            revert AirDropAlreadyClaimed();
+        }
+
+        isAirdropClaimed[_airdropId][msg.sender] = true;
+
+        musicalToken.safeTransferFrom(
+            address(this),
+            msg.sender,
+            airdrop.tokenId,
+            1,
+            ""
+        );
+
+        airdrop.remainingTokenAmount -= 1;
+        emit AirdropClaimed(_airdropId, airdrop.tokenId, 1);
+
+        if (airdrop.remainingTokenAmount == 0) {
+            delete airdrops[_airdropId];
+        }
+    }
+
     function registerNftExchange(
         uint _tokenId,
         uint _amount,
@@ -723,6 +835,7 @@ contract NFTMarketplaceV2 is
             exchangeItem.baseTokenId = 0;
             exchangeItem.baseTokenAmount = 0;
             exchangeItem.baseUserApproved = false;
+            exchangeItem.counterUserApproved = false;
             exchangeItem.baseUserAddress = address(0);
 
             emit NftForExchangeCanceled(_exchangeId);
@@ -739,6 +852,7 @@ contract NFTMarketplaceV2 is
             exchangeItem.counterTokenId = 0;
             exchangeItem.counterTokenAmount = 0;
             exchangeItem.counterUserApproved = false;
+            exchangeItem.baseUserApproved = false;
             exchangeItem.counterUserAddress = address(0);
 
             emit NftForExchangeCanceled(_exchangeId);
@@ -797,6 +911,9 @@ contract NFTMarketplaceV2 is
     function cancelListing(uint256 _listingId) external {
         Listing memory listing = listings[_listingId];
 
+        if (listing.isFirstTimeListing) {
+            revert CannotDelistFirstTimeListings();
+        }
         if (listing.price == 0) {
             revert NFTNotListed(_listingId);
         }
@@ -827,29 +944,29 @@ contract NFTMarketplaceV2 is
 
     /// @notice Cancels a listing
     /// @param _tokenId The ID of the listing to delist
-    function cancelSpecialNFTListing(uint256 _tokenId) external {
-        SpecialListing memory specialListing = specialListings[_tokenId];
+    // function cancelSpecialNFTListing(uint256 _tokenId) external {
+    //     SpecialListing memory specialListing = specialListings[_tokenId];
 
-        if (specialListing.price == 0) {
-            revert NFTNotListed(_tokenId);
-        }
-        if (specialListing.seller != msg.sender) {
-            revert NotSeller(msg.sender);
-        }
+    //     if (specialListing.price == 0) {
+    //         revert NFTNotListed(_tokenId);
+    //     }
+    //     if (specialListing.seller != msg.sender) {
+    //         revert NotSeller(msg.sender);
+    //     }
 
-        // Transfer the NFT back to the seller
-        musicalToken.safeTransferFrom(
-            address(this),
-            msg.sender,
-            specialListing.tokenId,
-            specialListing.amount,
-            ""
-        );
+    //     // Transfer the NFT back to the seller
+    //     musicalToken.safeTransferFrom(
+    //         address(this),
+    //         msg.sender,
+    //         specialListing.tokenId,
+    //         specialListing.amount,
+    //         ""
+    //     );
 
-        emit SpecialNFTListingCanceled(_tokenId, msg.sender);
-        // Remove the listing
-        delete specialListings[_tokenId];
-    }
+    //     emit SpecialNFTListingCanceled(_tokenId, msg.sender);
+    //     // Remove the listing
+    //     delete specialListings[_tokenId];
+    // }
 
     /// @notice Updates the fee configuration for first-time sales
     /// @dev This function sets the platform fee, splits, and seller share percentages
@@ -922,6 +1039,14 @@ contract NFTMarketplaceV2 is
         emit PlatformFeeReceiverUpdated(oldReceiver, _newPlatformFeeReceiver);
     }
 
+    // Function to update the cap
+    function updateMaxNFTCap(uint256 _newCap) external onlyOwner {
+        require(_newCap > 0, "Cap must be greater than zero");
+        maxNFTCap = _newCap;
+
+        emit MaxNFTCapUpdated(_newCap);
+    }
+
     /// @notice Withdraws undistributed royalty funds for a specific recipient
     /// @dev This function allows the contract owner to withdraw the undistributed funds
     /// for a specified recipient. The recipient must have undistributed funds available.
@@ -969,7 +1094,8 @@ contract NFTMarketplaceV2 is
             interfaceId == type(IERC1155Receiver).interfaceId ||
             super.supportsInterface(interfaceId);
     }
-     function _new(uint __new) public pure returns(uint) {
+
+    function _new(uint __new) public pure returns(uint) {
         return __new;
     }
 }

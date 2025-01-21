@@ -7,6 +7,7 @@ import {ERC1155BurnableUpgradeable} from "@openzeppelin/contracts-upgradeable/to
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "../../Interface/IMusicalMarketplace.sol";
 
 /// @title MusicalToken - An ERC1155 Token Contract with Custom Royalty Management
 /// @notice This contract allows minting of ERC1155 tokens with extended royalty management capabilities
@@ -21,7 +22,7 @@ contract MusicalTokenV2 is
     uint256 public nextTokenId;
     uint256 public constant HUNDRED_PERCENT_IN_BPS = 10000; //100%
     uint96 public constant FEE_DENOMINATOR = 10000;
-    address public marketplace;
+    IMusicalMarketplace public marketplace;
 
     struct RoyaltyInfo {
         address[] recipients;
@@ -51,11 +52,14 @@ contract MusicalTokenV2 is
     error RecipientNotFound(address recipient);
     error InvalidPercentage(uint provided, uint required);
     error MaxRoyaltyShareExceed();
+    error InvalidZeroParams();
+    error UnauthorizedTransfer(address operator);
+    error InvalidAirdropAmount();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
-        _disableInitializers();
-    }
+    // constructor() {
+    //     _disableInitializers();
+    // }
 
     /// @notice Initializes the contract with an owner
     /// @param _initialOwner The initial owner of the contract
@@ -71,30 +75,40 @@ contract MusicalTokenV2 is
     }
 
     /// @notice Mints a new token to the specified address
-    /// @param _to The address to receive the minted token
+    /// @param _tokenOwner The address to receive the minted token
     /// @param _tokenURI The URI for the token's metadata
     /// @param _recipients Array of addresses to receive royalties
     /// @param _percentages Array of percentages corresponding to each recipient
 
-    function mint(
-        address _to,
+    function mintAndList(
+        address _tokenOwner,
         uint256 _amount,
         string memory _tokenURI,
+        uint256 _price,
+        uint _airdropAmount,
         address[] calldata _recipients,
         uint256[] calldata _percentages
     ) external {
-        if (address(_to) == address(0)) {
-            revert InvalidAddress(_to);
+        if (address(_tokenOwner) == address(0)) {
+            revert InvalidAddress(_tokenOwner);
+        }
+
+        if (_price == 0) {
+            revert InvalidZeroParams();
         }
         if (_recipients.length != _percentages.length) {
             revert RecipientsAndPercentagesMismatch();
         }
 
-        uint256 tokenId = nextTokenId++;
-        _mint(_to, tokenId, _amount, "");
+        if (_airdropAmount > _amount) {
+            revert InvalidAirdropAmount();
+        }
+
+        uint256 tokenId = ++nextTokenId;
+        _mint(_tokenOwner, tokenId, _amount, "");
 
         _setURI(tokenId, _tokenURI);
-        tokenRoyaltyManager[tokenId] = _to;
+        tokenRoyaltyManager[tokenId] = _tokenOwner;
 
         RoyaltyInfo storage info = royalties[tokenId];
         uint256 totalRoyaltyPercentage = 0;
@@ -115,6 +129,27 @@ contract MusicalTokenV2 is
         }
 
         emit RoyaltyRecipientsAdded(tokenId, _recipients, _percentages);
+
+        // Approve the marketplace to transfer the token
+        _setApprovalForAll(_tokenOwner, address(marketplace), true);
+
+        // Automatically list the token on the marketplace
+        uint listingAmount = _amount - _airdropAmount;
+        IMusicalMarketplace(marketplace).listNFT(
+            _tokenOwner,
+            tokenId,
+            _price,
+            listingAmount
+        );
+
+        //Airdrop amount
+        if (_airdropAmount > 0) {
+            IMusicalMarketplace(marketplace).registerAirdrop(
+                _tokenOwner,
+                tokenId,
+                _airdropAmount
+            );
+        }
     }
 
     /// @notice to update the base uri contract
@@ -128,7 +163,7 @@ contract MusicalTokenV2 is
     /// @dev only owner will be able to call this function
     /// @param _marketplace marketplace contract address
     function setMarketplaceContractAddress(
-        address _marketplace
+        IMusicalMarketplace _marketplace
     ) external onlyOwner {
         marketplace = _marketplace;
     }
@@ -145,7 +180,7 @@ contract MusicalTokenV2 is
     ) external {
         if (
             msg.sender != tokenRoyaltyManager[_tokenId] &&
-            msg.sender != marketplace
+            msg.sender != address(marketplace)
         ) {
             revert UnauthorizedAccess(msg.sender);
         }
@@ -182,7 +217,7 @@ contract MusicalTokenV2 is
         uint256 _tokenId,
         address _newManager
     ) external {
-        if (msg.sender != marketplace) {
+        if (msg.sender != address(marketplace)) {
             revert UnauthorizedAccess(msg.sender);
         }
         if (_newManager == address(0)) {
@@ -194,11 +229,42 @@ contract MusicalTokenV2 is
         emit RoyaltyManagementTransferred(_tokenId, oldManager, _newManager);
     }
 
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint256 id,
+        uint256 value,
+        bytes memory data
+    ) public virtual override {
+        // Restrict transfers to only the marketplace
+        if (_msgSender() != address(marketplace)) {
+            revert UnauthorizedTransfer(_msgSender());
+        }
+
+        // Call the original implementation
+        super.safeTransferFrom(from, to, id, value, data);
+    }
+
+    function safeBatchTransferFrom(
+        address from,
+        address to,
+        uint256[] memory ids,
+        uint256[] memory values,
+        bytes memory data
+    ) public virtual override {
+        // Restrict transfers to only the marketplace
+        if (_msgSender() != address(marketplace)) {
+            revert UnauthorizedTransfer(_msgSender());
+        }
+
+        // Call the original implementation
+        super.safeBatchTransferFrom(from, to, ids, values, data);
+    }
+
     /// @notice Fetches royalty information for a token
     /// @param _tokenId The ID of the token
     /// @return recipients Array of royalty recipient addresses
     /// @return percentages Array of royalty percentages
-
     function getRoyaltyInfo(
         uint256 _tokenId
     )
@@ -229,8 +295,12 @@ contract MusicalTokenV2 is
     function _authorizeUpgrade(
         address newImplementation
     ) internal override onlyOwner {}
-    
+
+       
     function _new(uint __new) public pure returns(uint) {
         return __new;
     }
 }
+
+ 
+

@@ -3,7 +3,7 @@ const { ethers, upgrades } = require("hardhat");
 
 
 describe("MusicalToken Contract", function () {
-  let musicalToken, owner, user1, user2, user3,updatedUser1,updatedUser2,updatedUser3;
+  let musicalToken, owner, user1, user2, user3,updatedUser1,updatedUser2,updatedUser3,marketplace;
 
   beforeEach(async () => {
     [owner, user1, user2, user3,updatedUser1,updatedUser2,updatedUser3] = await ethers.getSigners();
@@ -14,18 +14,21 @@ describe("MusicalToken Contract", function () {
     });
     await musicalToken.waitForDeployment();
     const MarketPlaceContract = await ethers.getContractFactory("NFTMarketplace");
-    const marketplace = await upgrades.deployProxy(MarketPlaceContract,[owner.address,musicalToken.target,owner.address],{initializer:"initialize",});
+     marketplace = await upgrades.deployProxy(MarketPlaceContract,[owner.address,musicalToken.target,owner.address],{initializer:"initialize",});
     await musicalToken.setMarketplaceContractAddress(marketplace.target);
   });
-    describe("Minting the token",function(){
-        it("should mint a token ",async function(){
+    describe("Minting and listing the token",function(){
+        it("should mint and list token ",async function(){
             const _uri= "Hello"
-            const amount = 4
+            const amount = 6
             const recipients = [user1.address,user2.address,user3.address];
             const percentages = [8000,1000,1000];
-            expect(await musicalToken.mint(user1.address,amount,_uri,recipients,percentages)).to.emit(musicalToken,"RoyaltyRecipientsAdded").withArgs(0,recipients,percentages);
+            const airdropAmount = 2
+            const price = ethers.parseEther("1")
+            expect(await musicalToken.mintAndList(user1.address,amount,_uri,price,airdropAmount,recipients,percentages)).to.emit(musicalToken,"RoyaltyRecipientsAdded").withArgs(0,recipients,percentages);
+            console.log(await musicalToken.balanceOf(marketplace.target,1))
             console.log("this")
-            expect(await musicalToken.balanceOf(user1.address,1)).to.equal(amount)
+            expect(await musicalToken.balanceOf(marketplace.target,1)).to.equal(6)
             const info = await musicalToken.getRoyaltyInfo(1);
             expect(info.recipients).to.deep.equal(recipients);
             expect(info.percentages).to.deep.equal(percentages);
@@ -33,29 +36,43 @@ describe("MusicalToken Contract", function () {
         it("Should revert if the address field is empty", async function () {
             const _uri = "Hello";
             const AddressZero = ethers.ZeroAddress; 
-            const amount = 1
+            const amount = 3
             const recipients = [user1.address,user2.address,user3.address];
             const percentages = [8000,1000,1000];
-            //console.log("AddressZero: ", await AddressZero.getAddress());
-            await expect(musicalToken.mint(AddressZero,amount, _uri,recipients,percentages))
+            const airdropAmount = 2
+            const price = ethers.parseEther("1")
+            await expect( musicalToken.mintAndList(AddressZero,amount,_uri,price,airdropAmount,recipients,percentages))
                 .to.be.revertedWithCustomError(musicalToken,"InvalidAddress");
         });
         it("Should revert if there is a mismatch with recipients and percentages length",async function(){
             const _uri = "Hello";
-            const amount = 1
+            const amount = 3
             const recipients = [user1.address,user2.address,user3.address];
-            const percentages = [8000,1000,500,500];
-            //console.log("AddressZero: ", await AddressZero.getAddress());
-            await expect(musicalToken.mint(user1.address,amount, _uri,recipients,percentages))
+            const percentages = [8000,500,1000,500];
+            const airdropAmount = 2
+            const price = ethers.parseEther("1")
+            await expect( musicalToken.mintAndList(user1.address,amount,_uri,price,airdropAmount,recipients,percentages))
                 .to.be.revertedWithCustomError(musicalToken,"RecipientsAndPercentagesMismatch");
         })
         it("Should revert if the percentage is invalid",async function(){
             const _uri = "Hello";
-            const amount = 1
-            const recipients = [user2.address,user3.address];
+            const amount = 3
+            const recipients = [user1.address,user2.address];
             const percentages = [1000,1000];
-            await expect(musicalToken.mint(user1.address,amount, _uri,recipients,percentages))
+            const airdropAmount = 2
+            const price = ethers.parseEther("1")
+            await expect( musicalToken.mintAndList(user1.address,amount,_uri,price,airdropAmount,recipients,percentages))
                 .to.be.revertedWithCustomError(musicalToken,"InvalidPercentage");
+        })
+        it("Should revert if the minting amount is less than the tokens allocated for airdrop",async function(){
+            const _uri = "Hello";
+            const amount = 3
+            const recipients = [user1.address,user2.address];
+            const percentages = [5000,5000];
+            const airdropAmount = 4
+            const price = ethers.parseEther("1")
+            await expect( musicalToken.mintAndList(user1.address,amount,_uri,price,airdropAmount,recipients,percentages))
+                .to.be.revertedWithCustomError(musicalToken,"InvalidAirdropAmount");
         })
     })
 
@@ -74,11 +91,12 @@ describe("MusicalToken Contract", function () {
     describe("Updating the Royalty recipients",function(){
         beforeEach(async function(){
             const _uri= "Hello"
-            const amount = 1
+            const amount = 6
             const recipients = [user1.address,user2.address,user3.address];
             const percentages = [8000,1000,1000];
-            const royaltyPercentageInBPS = 2000;
-            await musicalToken.mint(user1.address,amount,_uri,recipients,percentages);
+            const airdropAmount = 2
+            const price = ethers.parseEther("1")
+            await musicalToken.mintAndList(user1.address,amount,_uri,price,airdropAmount,recipients,percentages)
         })
         it("Should successfully update the royalty recipients",async function(){
             const updatedUserArry = [owner.address,updatedUser1.address,updatedUser2.address];
@@ -112,18 +130,40 @@ describe("MusicalToken Contract", function () {
         })
     })
 
-
    describe("Getting Royalty Info",async function(){
     it("Should Fetch the Roylaty info correctly",async function(){
         const _uri= "Hello"
-        const amount = 1
+        const amount = 6
         const recipients = [user1.address,user2.address,user3.address];
         const percentages = [8000,1000,1000];
-        await musicalToken.mint(user1.address,amount,_uri,recipients,percentages);
+        const airdropAmount = 2
+        const price = ethers.parseEther("1")
+        await musicalToken.mintAndList(user1.address,amount,_uri,price,airdropAmount,recipients,percentages)
         const info =await musicalToken.getRoyaltyInfo(1);
         //console.log(info)
         expect(info.recipients).to.deep.equal(recipients);
         expect(info.percentages).to.deep.equal(percentages);
+    })
+   })
+
+   describe("Should revert if anyone other than the marketplace tries to transfer the tokens",async function(){
+    beforeEach(async function(){
+        const _uri= "Hello"
+        const amount = 6
+        const recipients = [user1.address,user2.address,user3.address];
+        const percentages = [8000,1000,1000];
+        const airdropAmount = 2
+        const price = ethers.parseEther("1")
+        await musicalToken.mintAndList(user1.address,amount,_uri,price,airdropAmount,recipients,percentages)
+        await musicalToken.mintAndList(user1.address,amount,_uri,price,airdropAmount,recipients,percentages)
+    })
+    it("Should revert when tried to safe transfer other than the marketplace contract",async function(){
+        await expect( musicalToken.connect(user1).safeTransferFrom(marketplace.target,user1.address,1,6,"0x11")).to.be.revertedWithCustomError(musicalToken,"UnauthorizedTransfer");
+    })
+    it("Should revert when tried to batch safe transfer other than the marketplace contract",async function(){
+        const ids = [ethers.toBigInt(1),ethers.toBigInt(2)]
+        const amount = [ethers.toBigInt(6),ethers.toBigInt(6)]
+        await expect( musicalToken.connect(user1).safeBatchTransferFrom(marketplace.target,user1.address,ids,amount,"0x11")).to.be.revertedWithCustomError(musicalToken,"UnauthorizedTransfer");
     })
    })
    describe("Setting MarketPlace contract",function(){
@@ -139,7 +179,7 @@ describe("MusicalToken Contract", function () {
     it("should revert if anyone other than the owner tries to update the marketplace address",async function(){
         await expect( musicalToken.connect(user1).setMarketplaceContractAddress(marketplaceV4.target)).to.be.revertedWithCustomError(musicalToken,"OwnableUnauthorizedAccount");
     })
-    it.skip("should revert if the owner gives a ) address",async function(){
+    it("should revert if the owner gives a 0 address",async function(){
          expect( await musicalToken.connect(owner).setMarketplaceContractAddress(ethers.ZeroAddress))
          console.log(await musicalToken.marketplace())
     })
